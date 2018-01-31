@@ -1,102 +1,139 @@
-# Feature name
+# Implement MutableCollection in UnsafeMutable{Raw}BufferPointer with non-mutating methods and accessors
 
-* Proposal: [SE-NNNN](NNNN-filename.md)
-* Authors: [Author 1](https://github.com/swiftdev), [Author 2](https://github.com/swiftdev)
+* Proposal: [SE-NNNN](NNNN-buffer-mutable-collection.md)
+* Authors: [Guillaume Lessard](https://github.com/glessard)
 * Review Manager: TBD
-* Status: **Awaiting implementation**
-
-*During the review process, add the following fields as needed:*
-
-* Implementation: [apple/swift#NNNNN](https://github.com/apple/swift/pull/NNNNN)
-* Decision Notes: [Rationale](https://lists.swift.org/pipermail/swift-evolution/), [Additional Commentary](https://lists.swift.org/pipermail/swift-evolution/)
-* Bugs: [SR-NNNN](https://bugs.swift.org/browse/SR-NNNN), [SR-MMMM](https://bugs.swift.org/browse/SR-MMMM)
-* Previous Revision: [1](https://github.com/apple/swift-evolution/blob/...commit-ID.../proposals/NNNN-filename.md)
-* Previous Proposal: [SE-XXXX](XXXX-filename.md)
+* Status: [Prototype branch](https://github.com/glessard/swift/tree/buffer-mutable-collection-gyb)
 
 ## Introduction
 
-A short description of what the feature is. Try to keep it to a
-single-paragraph "elevator pitch" so the reader understands what
-problem this proposal is addressing.
+`UnsafeMutableBufferPointer` and `UnsafeMutableRawBufferPointer` are non-owning
+interfaces to underlying memory storage, as are their underlying types,
+`UnsafeMutablePointer` and `UnsafeMutableRawPointer`. They implement the
+`MutableCollection` on behalf of their underlying storage as a convenience. In
+keeping with Swift's emphasis on value semantics, `MutableCollection` methods
+are declared `mutating`. In the case of `UnsafeMutableBufferPointer` and
+`UnsafeMutableRawBufferPointer`, this means that they must be declared `var`
+most of the time, even when in reality there is no mutation of the
+struct itself.
 
-Swift-evolution thread: [Discussion thread topic for that proposal](https://lists.swift.org/pipermail/swift-evolution/)
+Swift-evolution thread:
+[tbd](https://lists.swift.org/pipermail/swift-evolution/)
 
 ## Motivation
 
-Describe the problems that this proposal seeks to address. If the
-problem is that some common pattern is currently hard to express, show
-how one can currently get a similar effect and describe its
-drawbacks. If it's completely new functionality that cannot be
-emulated, motivate why this new functionality would help Swift
-developers create better Swift code.
+`UnsafeMutableBufferPointer` and `UnsafeMutableRawBufferPointer` must be
+declared `var` at most points of use, even when there is no actual mutation of
+the variable. In contrast, `UnsafeMutablePointer` and `UnsafeMutableRawPointer`,
+to which the `BufferPointer` types are utility front-ends, do not have any
+mutable functions or variables.
+
+Because of the (unnecessarily) mutable interface, methods such as
+`Array.withUnsafeMutableBufferPointer()` must require closures where a
+`BufferPointer` parameter must be marked `inout`. In such cases, `inout` falsely
+suggests that one can substitute a new buffer in place of the original one. In
+actuality, the implementation of `Array.withUnsafeMutableBufferPointer()` traps
+with the message `Fatal error: Array withUnsafeMutableBufferPointer: replacing
+the buffer is not allowed` when any change is made to the
+`UnsafeMutableBufferPointer` struct (as opposed to changes to the actual memory
+buffer).
+
+There are a few bugs and PRs along these lines:
+[SR-3782](https://bugs.swift.org/browse/SR-3782),
+[SR-3513](https://bugs.swift.org/browse/SR-3513),
+[PR-12504](https://github.com/apple/swift/pull/12504),
+[PR-13071](https://github.com/apple/swift/pull/13071).
 
 ## Proposed solution
 
-Describe your solution to the problem. Provide examples and describe
-how they work. Show how your solution is better than current
-workarounds: is it cleaner, safer, or more efficient?
+The author proposes adding a protocol, tentatively named
+`_BufferMutableCollection`, which extends `MutableCollection` by redeclaring its
+interface as non-mutating methods and accessors. No other API is otherwise
+added. This new protocol would adopted by the `BufferPointer` types, and
+would declare some relevant default implementations, for the use of
+`UnsafeMutableBufferPointer` and `UnsafeMutableRawBufferPointer`.
+
+`Array.withUnsafeMutableBufferPointer()`'s closure parameter's signature will
+change to have a `let`, rather than `inout`, parameter.
+
+This will remove unnecessary mutation markers from code, thereby clarifying the
+semantics of the `BufferPointer` types.
 
 ## Detailed design
 
-Describe the design of the solution in detail. If it involves new
-syntax in the language, show the additions and changes to the Swift
-grammar. If it's a new API, show the full API and its documentation
-comments detailing what it does. The detail in this section should be
-sufficient for someone who is *not* one of the authors to be able to
-reasonably implement the feature.
+The new protocol derive from `MutableCollection`, duplicating its the interface
+with exclusively `nonmutating` versions of its functions and subscripts.
+```
+public protocol _BufferMutableCollection: MutableCollection
+{
+  subscript(position: Index) -> Element { get nonmutating set }
+
+  subscript(bounds: Range<Index>) -> SubSequence { get nonmutating set }
+
+  nonmutating func partition(
+    by belongsInSecondPartition: (Element) throws -> Bool
+  ) rethrows -> Index
+
+  nonmutating func swapAt(_ i: Index, _ j: Index)
+
+  nonmutating func _withUnsafeMutableBufferPointerIfSupported<R>(
+    _ body: (UnsafeMutableBufferPointer<Element>) throws -> R
+  ) rethrows -> R?
+}
+```
+
+Default implementations of these will be provided where appropriate,
+e.g. `partition` and `_withUnsafeMutableBufferPointerIfSupported`.
+
+Some functions are implemented as extensions on `MutableCollection`, without
+being part of the protocol interface. These would be implemented on the new
+protocol as well:
+```
+extension _BufferMutableCollection {
+  public nonmutating func sort() { /*...*/ }
+
+  public subscript<R: RangeExpression>(r: R) -> SubSequence
+    where R.Bound == Index {
+      get { /*...*/ }
+      nonmutating set { /*...*/ }
+  }
+}
+
+extension _BufferMutableCollection where Self: BidirectionalCollection {
+  public nonmutating func reverse() { /*...*/ }
+}
+```
+
+The `Array` function `withUnsafeMutabelBufferPointer` will be modified to take
+a closure whose BufferPointer parameter is non-mutating:
+```
+extension Array {
+  public mutating func withUnsafeMutableBufferPointer<R>(
+    _ body: (UnsafeMutableBufferPointer<Element>) throws -> R
+  ) rethrows -> R { /*...*/ }
+}
+```
+
 
 ## Source compatibility
 
-Relative to the Swift 3 evolution process, the source compatibility
-requirements for Swift 4 are *much* more stringent: we should only
-break source compatibility if the Swift 3 constructs were actively
-harmful in some way, the volume of affected Swift 3 code is relatively
-small, and we can provide source compatibility (in Swift 3
-compatibility mode) and migration.
-
-Will existing correct Swift 3 or Swift 4 applications stop compiling
-due to this change? Will applications still compile but produce
-different behavior than they used to? If "yes" to either of these, is
-it possible for the Swift 4 compiler to accept the old syntax in its
-Swift 3 compatibility mode? Is it possible to automatically migrate
-from the old syntax to the new syntax? Can Swift applications be
-written in a common subset that works both with Swift 3 and Swift 4 to
-aid in migration?
+The change to `Array.withUnsafeMutableBufferPointer()` will have source
+compatibility implications, albeit minor: any explicitly typed closures will
+have to have the `inout` keyword removed. The other changes do not have
+compatibility implications, though warnings may appear where there previously
+were none.
 
 ## Effect on ABI stability
 
-Does the proposal change the ABI of existing language features? The
-ABI comprises all aspects of the code generation model and interaction
-with the Swift runtime, including such things as calling conventions,
-the layout of data types, and the behavior of dynamic features in the
-language (reflection, dynamic dispatch, dynamic casting via `as?`,
-etc.). Purely syntactic changes rarely change existing ABI. Additive
-features may extend the ABI but, unless they extend some fundamental
-runtime behavior (such as the aforementioned dynamic features), they
-won't change the existing ABI.
-
-Features that don't change the existing ABI are considered out of
-scope for [Swift 4 stage 1](README.md). However, additive features
-that would reshape the standard library in a way that changes its ABI,
-such as [where clauses for associated
-types](https://github.com/apple/swift-evolution/blob/master/proposals/0142-associated-types-constraints.md),
-can be in scope. If this proposal could be used to improve the
-standard library in ways that would affect its ABI, describe them
-here.
+This has an effect on the ABI of `UnsafeMutableBufferPointer`,
+`UnsafeMutableRawBuferPointer` and `Array`.  The time to do this change
+is before ABI stability is declared, if ever.
 
 ## Effect on API resilience
 
-API resilience describes the changes one can make to a public API
-without breaking its ABI. Does this proposal introduce features that
-would become part of a public API? If so, what kinds of changes can be
-made without breaking ABI? Can this feature be added/removed without
-breaking ABI? For more information about the resilience model, see the
-[library evolution
-document](https://github.com/apple/swift/blob/master/docs/LibraryEvolution.rst)
-in the Swift repository.
+N/A
 
 ## Alternatives considered
 
-Describe alternative approaches to addressing the same problem, and
-why you chose this approach instead.
-
+The status quo could remain, despite the oddity of forcing the behaviour
+of value semantics onto these reference types.
