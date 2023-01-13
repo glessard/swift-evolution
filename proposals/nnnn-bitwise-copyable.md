@@ -39,7 +39,7 @@ A new `BitwiseCopyable` marker protocol is proposed for Swift. A nominal type ca
 
 In the context of this proposal, a _primitive type_ is a built-in type defined by the language to never be represented by any managed pointers. This set of types include `Int` and `Double`. See Detailed design for the full list of types.
 
-TODO: put some examples throughout this, like a BitwiseCopyable Optional.
+TODO: put some examples throughout this, like a BitwiseCopyable Optional??
 
 The reference types, like `class` and `actor`, may be represented as automatically managed pointers, so they cannot conform to `BitwiseCopyable`.
 
@@ -52,10 +52,7 @@ By their nature, types conforming to `BitwiseCopyable` always have an empty `dei
 The `BitwiseCopyable` protocol has no visible requirements, similar to `Sendable`.
 
 Conformance to `BitwiseCopyable` requires complete knowledge of all stored properties in the type.
-In particular, this means resilient types declared in a different module cannot retroactively conform to `BitwiseCopyable`; only `@frozen` types from such modules are supported.
-
-TODO: I think we need the same-file rule about Sendable and non-resilient types in the same module?
-
+In particular, this means you cannot add retroactive conformances of `BitwiseCopyable` to resilient types declared in a different module; only `@frozen` types from such modules are supported. Any kind of type defined within the same module can have retroactive conformances to `BitwiseCopyable`.
 
 ### The primitive types
 
@@ -82,11 +79,39 @@ The following built-in types in Swift are considered to be primitive:
 
 ## Effect on ABI stability
 
-The addition of conformances to `BitwiseCopyable` will not cause an ABI break.
+The addition of conformances to `BitwiseCopyable` in a library will not cause an ABI break for users.
 
 ## Source compatibility
 
-This is an additive change with no impact on source compatability.
+This addition of a new protocol will not impact existing source code that does not use it. 
+
+There is a wrinkle in the source compatability story for `BitwiseCopyable` types. Protocols in Swift typically do not define _negative_ requirements, i.e., that a kind of member does not exist. The `BitwiseCopyable` protocol, in essence, defines an unbounded number of negative requirements.
+
+A consequence of allowing retroactive conformances to non-resilient types defined in other modules is that a new kind of source compatability issue can appear. Suppose an API vendor conditionally includes a stored property for a type, say, depending on the platform:
+
+```swift
+// vendor's type that varies per-platform:
+@frozen public struct Tree {
+  var left: RawPointer
+  var right: RawPointer
+  var size: UInt
+#if macOS
+  var nodeName: NSString = "?"
+#endif
+}
+```
+
+For clients using this API, `Tree` can now only be made retroactively `BitwiseCopyable` on some platforms:
+
+```swift
+// only when compiling for macOS, this conformance is invalid,
+// because String is not BitwiseCopyable!
+extension Tree: BitwiseCopyable {}
+```
+
+In this case, the conditions for when member is included can be mirrored on the client side with an `#if`-guard around the conformance. But, that's not always possible as the conditions can be arbitrary and unknown to clients. Thus, clients may be lulled into believing that their code is cross-platform, when it silently is not.
+
+The only other protocol in Swift that expresses a negative requirement is `Sendable`, but retroactive conformances to `Sendable` are disallowed; only `@unchecked Sendable` is allowed retroactively.
 
 ## Effect on API resilience
 
@@ -95,13 +120,15 @@ As with any protocol, the additional constraint can cause a source break for use
 
 ## Alternatives considered
 
-None.
+Herein lies some modifications or additions left out of this proposal.
 
-<!-- TODO:
+### Require direct conformance to `BitwiseCopyable`
+
+One solution to the Source Compatability problem described earlier is to disallow retroactive conformances to `BitwiseCopyable` for types defined in a different module, even if they are non-resilient.
+
+In addition, various levels of relaxed checking for retroactive conformances, like an `@unchecked BitwiseCopyable`, might be worth considering to allow clients to adopt the protocol when they are reasonably sure it is correct.
+
+
+<!-- 
 ## Acknowledgments
-
-If significant changes or improvements suggested by members of the 
-community were incorporated into the proposal as it developed, take a
-moment here to thank them for their contributions. Swift evolution is a 
-collaborative process, and everyone's input should receive recognition!
--->
+This proposal benefitted from discussions with John McCall. -->
