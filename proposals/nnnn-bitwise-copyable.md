@@ -1,4 +1,4 @@
-# BitwiseCopyable Types
+# Bitwise Types (??)
 
 * Proposal: [SE-NNNN](NNNN-filename.md)
 * Authors: [Kavon Farvardin](https://github.com/kavon)
@@ -15,13 +15,15 @@
 
 ## Introduction
 
-Swift's implementation of generics uses an abstraction mechanism for transferring values of generic type. This abstraction is needed in-part because the underlying concrete type may contain managed pointers that require extra work during a copy (e.g., incrementing a reference count). For concrete types _without_ any managed pointers, the abstraction for copying the value just performs a `memcpy`, which is a simple bit-for-bit copy of the value without any pointer management.
+All values of generic type in Swift today support basic capabilities of being transferred (copied or moved) and destroyed. The underlying concrete type of a generic value induces a unique routine for performing the copy or move. These routines are unique in-part because managed references can appear anywhere within the value and require extra bookkeeping during a copy. Thus, in general it is not safe to perform a simple byte-for-byte copy ("memcpy") of a `struct`, because copying a `class` reference additionally requires incrementing the object's reference count.
 
-A new built-in protocol `BitwiseCopyable` is proposed to describe generic types that do not contain any managed pointers. One of the key use-cases for this protocol is to provide safety for systems-level code, such those dealing with foreign-function interfaces. For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language. Until now, there was no such notion. Henceforth, the term "trivial" will not be used.
+New kinds of type constraints `BitwiseCopyable` and `BitwiseMovable` are proposed to describe generic values that support these simple transfers. One of the key use-cases for these constraints is to provide safety and performance for low-level code, such those dealing with foreign-function interfaces. For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language. The term _trivial_ in that proposal refers to the byte-for-byte transferability that is proposed here.
 
 <!-- Swift-evolution thread: [Discussion thread topic for that proposal](https://forums.swift.org/) -->
 
 ## Motivation
+
+<!-- For example, copying a struct involves copying each stored property. If the concrete type is a class, a copy of the managed reference to the object is created, which involves reference-count bookkeeping. Thus, if a struct contains a  -->
 
 TODO: Do we really need motivation when we can just point to SE-370?
 
@@ -61,7 +63,7 @@ In particular, this means you cannot add retroactive conformances of `BitwiseCop
 The following built-in types in Swift are considered to be primitive: 
 
 - `Bool`
-- `StaticString`
+<!-- - `StaticString` NOTE: it is, but no need to list it. -->
 - Any `@convention(c)` function.
 - The fixed-precision integer types:
   - `Int8`, `Int16`, `Int32`, `Int64`, `Int`
