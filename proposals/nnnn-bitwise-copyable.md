@@ -27,14 +27,14 @@ For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370
 
 <!-- For example, copying a struct involves copying each stored property. If the concrete type is a class, a copy of the reference to the object is created, which involves reference-count bookkeeping. Thus, if a struct contains a  -->
 
-TODO: Craft a motivating example using SE-370 where it's not 
+TODO: Craft a motivating example using SE-370???
 
 TODO: two unsafe buffer pointers copy to and from instead of a loop for each element.
 want to optimize the code doing this stuff with memcpy.
 
 ```swift
 func copyAll<T>(from: UnsafeBufferPointer<T>, to: UnsafeMutableBufferPointer<T>) {
-  // a manual implementation of `from.copyBytes(to: to)`
+  // a manual implementation of `from.copyBytes(to: to)` ?
 
   if val is BitwiseCopyable {
     // do a memcpy with confidence.
@@ -62,11 +62,12 @@ Use-cases include:
 
 ## Proposed solution
 
-A new `BitwiseCopyable` and `BitwiseMovable` layout constraints are proposed for Swift. You can use a layout constraint much in the same way as a marker protocol, such as constraining a generic parameter with `some BitwiseCopyable` or forming an existential with `any BitwiseCopyable`.
+New type constraints `BitwiseCopyable` and `BitwiseMovable` are proposed for Swift that describe some characteristic of the value's representation in memory. This new kind of constraint is called a *layout constraint*. They work like usual type constraints in that you can constrain a generic parameter with `some BitwiseCopyable`, but you cannot form an existential of a layout constraint like `any BitwiseCopyable`. An existential erases type information and changes the representation of the underlying value to a universial boxed representation, so it is not the case that `any BitwiseCopyable` is itself bit-for-bit copyable.
 
-A nominal type satisfies `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
 
-- Its type is primitive.
+ A nominal type satisfies either `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
+
+- Its type is implicitly `BitwiseCopyable`.
 - Its type satisfies `BitwiseCopyable`.
 - Its type is a tuple where all elements satisfy `BitwiseCopyable`.
 
