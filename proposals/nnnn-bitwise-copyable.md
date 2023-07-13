@@ -1,4 +1,4 @@
-# BitwiseCopyable and TriviallyDestroyable
+# BitwiseCopyable and BitwiseMovable
 
 * Proposal: [SE-NNNN](NNNN-filename.md)
 * Authors: [Kavon Farvardin](https://github.com/kavon)
@@ -17,13 +17,11 @@
 
 All values of generic type in Swift today support basic capabilities of being transferred (copied or moved) and destroyed. A generic value is associated with routines and additional checking when performing such transfers to abstract over the underlying concrete type.
 These routines are needed in-part because managed references can appear anywhere within the underlying concrete value and those references require extra bookkeeping during a copy or destroy.
-But when working with a value of concrete type, Swift can take advantage of knowledge that a value does not contain references, skipping the extra work and performing a simple bit-for-bit copy ("memcpy") or a no-operation destruction.
+But when working with a value of concrete type, Swift can take advantage of knowledge that a value does not contain managed references, skipping the extra work and performing a simple bit-for-bit copy ("memcpy") or a no-operation destruction.
 
-This proposal introduces a layout constraint `TriviallyDestroyable` to describe generic values that support these simple kinds of operations.
-Its name refers only to trivial destruction because not all types support copying, but all types support destruction.
-Having trivial destruction implies support for support bit-for-bit copying and are analogous to "plain-old data" in other languages.
-
-One of the key use-cases for this constraint is to provide safety and performance for low-level code, such those dealing with foreign-function interfaces. For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language. The term _trivial_ in that proposal refers to the trivial destruction that is discussed here.
+This proposal introduces a layout constraints `BitwiseCopyable` and `BitwiseMovable` to describe generic values that support these simple kinds of operations.
+One of the key use-cases for these constraint is to provide safety and performance for low-level code, such those dealing with foreign-function interfaces.
+For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit. The term _trivial_ in that proposal refers to the _bitwise_ notion that is discussed here.
 
 <!-- Swift-evolution thread: [Discussion thread topic for that proposal](https://forums.swift.org/) -->
 
@@ -31,34 +29,30 @@ One of the key use-cases for this constraint is to provide safety and performanc
 
 <!-- For example, copying a struct involves copying each stored property. If the concrete type is a class, a copy of the managed reference to the object is created, which involves reference-count bookkeeping. Thus, if a struct contains a  -->
 
-TODO: Do we really need motivation when we can just point to SE-370?
+TODO: Craft a motivating example using SE-370 where it's not 
 
+<!-- 
 Use-cases include:
 - Working with FFIs.
-- Serialization APIs, such as those writing stuff over the wire?
+- Serialization APIs, such as those writing stuff over the wire? 
+-->
 
 ## Proposed solution
 
-A new `TriviallyDestroyable` layout constraint is proposed for Swift. You can use a layout constraint much in the same way as a marker protocol, such as constraining a generic parameter with `some TriviallyDestroyable` or forming an existential with `any TriviallyDestroyable`.
+A new `BitwiseCopyable` and `BitwiseMovable` layout constraints are proposed for Swift. You can use a layout constraint much in the same way as a marker protocol, such as constraining a generic parameter with `some BitwiseCopyable` or forming an existential with `any BitwiseCopyable`.
 
-A nominal type satisfies `TriviallyDestroyable` if it is a struct or enum with an undefined deinit where all of its stored properties or associated values satisfy at least one of the following requirements:
+A nominal type satisfies `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
 
 - Its type is primitive.
-- Its type satisfies `TriviallyDestroyable`.
-- Its type is a tuple where all elements satisfy `TriviallyDestroyable`.
+- Its type satisfies `BitwiseCopyable`.
+- Its type is a tuple where all elements satisfy `BitwiseCopyable`.
 
 In the context of this proposal, a _primitive type_ is a built-in type defined by the language to never be represented by any managed pointers.
 This set of types include `Int` and `Double`. See Detailed design for the full list of types and additional minutiae. 
 
-By their nature, types satisfying `TriviallyDestroyable` can support bit-for-bit copying if the type is copyable. 
-But `TriviallyDestroyable` alone does not assume copyability of its conformers. 
-Since copyable types are quite common, a typealias `BitwiseCopyable` is provided for convenience in the standard library:
+By their nature, types satisfying `BitwiseCopyable` can support bit-for-bit copying:
 
-```swift
-public typealias BitwiseCopyable = TriviallyDestroyable & Copyable
-```
-
-TODO: examples involving SE-370 that are now possible with TriviallyDestroyable to answer the issues raised in the Motivation section.
+TODO: example involving SE-370 that is now possible with TriviallyDestroyable to answer the issues raised in the Motivation section.
 
 
 ## Detailed design
@@ -67,17 +61,60 @@ There are two key differences between a layout constraint and a marker protocol.
 The first is that a layout constraint has runtime metadata associated with it to support dynamic casts:
 
 ```swift
-func copyInto(_ val: Any, _ pointer: UnsafeMutableRawPointer) {
+func copyFromAnyInto(_ val: Any, _ pointer: UnsafeMutableRawPointer) {
   if val is BitwiseCopyable {
     // do a memcpy with confidence.
+  } else {
+    // ... less optimized approach
   }
 }
 ```
 
-The second difference is that whether a type satisfies a layout constraints can
-be automatically derived by the compiler.
+The second difference is that whether a type satisfies a layout constraint can be automatically derived by the compiler.
 
-TODO: more details on the auto-derivation procedure. 
+## Automatic derivation of `BitwiseCopyable`
+
+A type does not always have to explicitly declare that it satisfies the layout constraint `BitwiseCopyable` in some cases:
+
+- The type is marked `@frozen`
+- The type is defined in the same module where a value of the type requires `BitwiseCopyable`
+
+For example:
+
+```swift
+// Defined in module A
+struct Coordinate {
+  var x: Int
+  var y: Int
+}
+
+func copyInto<T: BitwiseCopyable>(_ t: T, _ pointer: UnsafeMutableRawPointer) { /* ... */ }
+
+// Call appears in module A
+copyInto(Coordinate(), pointer) // OK
+```
+A limited form of this kind of derviation occurs for determining whether a type is `Sendable`, but `BitwiseCopyable` goes further to handle generic types like `Optional<T>`:
+
+```swift
+let x: Optional<AnyObject> = nil
+let y: Optional<Coordinate> = nil
+
+copyInto(x, pointer) // error: Optional<AnyObject> does not satisfy BitwiseCopyable
+copyInto(y, pointer) // OK
+```
+
+Specifically, for a generic struct or enum, the decision procedure is performed ad-hoc only when all generic parameters are bound to a type:
+
+```swift
+func copyGeneric<Elm>(_ z: MyGenericType<Elm>) {
+  copyInto(z, pointer) // error: function 'copyInto' requires that 'MyGenericType<T>' conform to 'BitwiseCopyable'
+}
+```
+
+Automatic derivation proceeds using a very similar recursive decision procedure as for proving a type satisfies `BitwiseCopyable`.
+The only difference is that types with an explicitly `@unchecked BitwiseCopyable` conformance are not considered to be `BitwiseCopyable` during derivation.
+Excluding such types helps ensure that possibly unsafe constructs remain explicitly opt-in rather than automatic.
+
 
 TODO: then integrate the below into the above
 
@@ -108,7 +145,7 @@ primitive, thus they implicitly satisfy `TriviallyDestroyable`:
 
 ### Adding `TriviallyDestroyable` to existing standard library types
 
-The following protocol types in the standard library will gain the `TriviallyDestroyable` 
+The following protocol types in the standard library will gain the `BitwiseCopyable` 
 constraint:
 
 - `FixedWidthInteger`
