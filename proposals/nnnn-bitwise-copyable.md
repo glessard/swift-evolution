@@ -15,21 +15,44 @@
 
 ## Introduction
 
-All values of generic type in Swift today support basic capabilities of being transferred (copied or moved) and destroyed. A generic value is associated with routines and additional checking when performing such transfers to abstract over the underlying concrete type.
-These routines are needed in-part because managed references can appear anywhere within the underlying concrete value and those references require extra bookkeeping during a copy or destroy.
-But when working with a value of concrete type, Swift can take advantage of knowledge that a value does not contain managed references, skipping the extra work and performing a simple bit-for-bit copy ("memcpy") or a no-operation destruction.
+All values of generic type in Swift today support basic capabilities of being copied, moved, and destroyed. A generic value is associated with routines and additional checking when performing such operations to abstract over the underlying concrete type.
+These routines are needed in-part because references can appear anywhere within the underlying concrete value and those references require extra bookkeeping during a copy or destroy.
+But when working with a value of concrete type, Swift can take advantage of knowledge that a value does not contain references, skipping the extra work and performing a simple bit-for-bit copy ("memcpy") or a no-operation destruction.
 
-This proposal introduces a layout constraints `BitwiseCopyable` and `BitwiseMovable` to describe generic values that support these simple kinds of operations.
-One of the key use-cases for these constraint is to provide safety and performance for low-level code, such those dealing with foreign-function interfaces.
-For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit. The term _trivial_ in that proposal refers to the _bitwise_ notion that is discussed here.
-
-<!-- Swift-evolution thread: [Discussion thread topic for that proposal](https://forums.swift.org/) -->
+This proposal defines new constraints `BitwiseCopyable` and `BitwiseMovable` to describe generic values that support these simple kinds of operations.
+One of the key use-cases for these constraint is to provide safety and performance for low-level code, such those dealing with foreign-function interfaces and serialization.
+For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`). The term _trivial_ in that proposal corresponds to the `BitwiseCopyable` constraint discussed here.
 
 ## Motivation
 
-<!-- For example, copying a struct involves copying each stored property. If the concrete type is a class, a copy of the managed reference to the object is created, which involves reference-count bookkeeping. Thus, if a struct contains a  -->
+<!-- For example, copying a struct involves copying each stored property. If the concrete type is a class, a copy of the reference to the object is created, which involves reference-count bookkeeping. Thus, if a struct contains a  -->
 
 TODO: Craft a motivating example using SE-370 where it's not 
+
+TODO: two unsafe buffer pointers copy to and from instead of a loop for each element.
+want to optimize the code doing this stuff with memcpy.
+
+```swift
+func copyAll<T>(from: UnsafeBufferPointer<T>, to: UnsafeMutableBufferPointer<T>) {
+  // a manual implementation of `from.copyBytes(to: to)`
+
+  if val is BitwiseCopyable {
+    // do a memcpy with confidence.
+  } else {
+    // ... less optimized approach
+  }
+}
+
+```
+
+Other motvation: need this for evolution proposal to disallow casts to prevent casts from UnsafePointer to UnsafeRawPointer because the type is nontrivial.
+
+UnsafeRawPointer.storeBytes  ?
+
+Ask Andy and Guilluame
+
+Andy has a WWDC talk about this.
+
 
 <!-- 
 Use-cases include:
@@ -50,6 +73,8 @@ A nominal type satisfies `BitwiseCopyable` if it is a copyable struct or enum wh
 In the context of this proposal, a _primitive type_ is a built-in type defined by the language to never be represented by any managed pointers.
 This set of types include `Int` and `Double`. 
 
+<!-- This proposal assumes the deinit must also not be explicitly defined. Happens to be the case today anyway since you can't define a deinit on these types. -->
+
 Satisfying `BitwiseCopyable` requires complete knowledge of all stored properties in the type.
 In particular, this means you cannot add retroactive conformances of `BitwiseCopyable` to resilient types declared in a different module; only `@frozen` types from such modules are supported. Any kind of type defined within the same module can have retroactive conformances to `BitwiseCopyable`.
 
@@ -58,6 +83,21 @@ See Detailed design for the full list of types and additional minutiae.
 By their nature, types satisfying `BitwiseCopyable` can support bit-for-bit copying:
 
 TODO: example involving SE-370 that is now possible with BitwiseCopyable to answer the issues raised in the Motivation section.
+
+```swift
+func f() {
+  weak let x = H()
+  weak let y = x
+}
+```
+
+TODO: everything but the following are BitwiseMovable:
+- c++ types are movable, but not bitwise movable.
+- weak references are BitwiseMovable but not BitwiseCopyable
+  - Swift weak references are BitwiseMovable but not BitwiseCopyable.
+  - only difference is objc and swift weak refs, we don't differentiate in the type system between them.
+- pthread_mutex_t is not movable at all. x
+- not bitwise movable to internal pointers / llvm::SmallString goes from stack to heap allocated pointer.
 
 
 ## Detailed design
@@ -245,6 +285,5 @@ One solution to the Source Compatability problem described earlier is to disallo
 In addition, various levels of relaxed checking for retroactive conformances, like an `@unchecked BitwiseCopyable`, might be worth considering to allow clients to adopt the protocol when they are reasonably sure it is correct.
 
 
-<!-- 
 ## Acknowledgments
-This proposal benefitted from discussions with John McCall, Joe Groff, etc. -->
+This proposal has benefitted from discussions with John McCall, Joe Groff, Andrew Trick, Michael Gottesman, and Guillaume Lessard.
