@@ -134,7 +134,7 @@ Excluding such types during automatic derivation helps ensure that using unsafe 
 Take for example a type that keeps an internal pointer into itself using one of the Unsafe types:
 
 ```swift
-class FlattenedTree {
+struct FlattenedTree {
   var data: [UInt8]  // TODO: is this the right kind of buffer?
   var childrenStart: UnsafeRawPointer
   var metadataStart: UnsafeRawPointer
