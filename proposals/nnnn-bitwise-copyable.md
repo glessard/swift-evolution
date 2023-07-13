@@ -48,15 +48,21 @@ A nominal type satisfies `BitwiseCopyable` if it is a copyable struct or enum wh
 - Its type is a tuple where all elements satisfy `BitwiseCopyable`.
 
 In the context of this proposal, a _primitive type_ is a built-in type defined by the language to never be represented by any managed pointers.
-This set of types include `Int` and `Double`. See Detailed design for the full list of types and additional minutiae. 
+This set of types include `Int` and `Double`. 
+
+Satisfying `BitwiseCopyable` requires complete knowledge of all stored properties in the type.
+In particular, this means you cannot add retroactive conformances of `BitwiseCopyable` to resilient types declared in a different module; only `@frozen` types from such modules are supported. Any kind of type defined within the same module can have retroactive conformances to `BitwiseCopyable`.
+
+See Detailed design for the full list of types and additional minutiae. 
 
 By their nature, types satisfying `BitwiseCopyable` can support bit-for-bit copying:
 
-TODO: example involving SE-370 that is now possible with TriviallyDestroyable to answer the issues raised in the Motivation section.
+TODO: example involving SE-370 that is now possible with BitwiseCopyable to answer the issues raised in the Motivation section.
 
 
 ## Detailed design
 
+The `BitwiseCopyable` protocol has no visible requirements, similar to the marker protocol `Sendable`.
 There are two key differences between a layout constraint and a marker protocol. 
 The first is that a layout constraint has runtime metadata associated with it to support dynamic casts:
 
@@ -106,33 +112,53 @@ copyInto(y, pointer) // OK
 Specifically, for a generic struct or enum, the decision procedure is performed ad-hoc only when all generic parameters are bound to a type:
 
 ```swift
-func copyGeneric<Elm>(_ z: MyGenericType<Elm>) {
+struct MyGenericType<T> {
+  var prop: T
+}
+
+func copyGeneric<Elm>(_ z: MyGenericType<Elm>) 
+  where Elm: BitwiseCopyable {
   copyInto(z, pointer) // error: function 'copyInto' requires that 'MyGenericType<T>' conform to 'BitwiseCopyable'
 }
+
+let fullyBound: MyGenericType<Int> =  // ...
+copyInto(fullyBound, pointer) // OK
 ```
+
+In this example, `Elm` is an unbound generic type within the body of `copyGeneric`, so a call to `copyInto` passed a value of type `MyGenericType<Elm>` will not trigger a derivation of `BitwiseCopyable`, despite `Elm` being constrained to `BitwiseCopyable`.
 
 Automatic derivation proceeds using a very similar recursive decision procedure as for proving a type satisfies `BitwiseCopyable`.
 The only difference is that types with an explicitly `@unchecked BitwiseCopyable` conformance are not considered to be `BitwiseCopyable` during derivation.
-Excluding such types helps ensure that possibly unsafe constructs remain explicitly opt-in rather than automatic.
+The family of Unsafe types in the Swift standard library have an `@unchecked BitwiseCopyable` conformance.
+Excluding such types during automatic derivation helps ensure that using unsafe constructs remains explicitly opt-in rather than implicit.
+Take for example a type that keeps an internal pointer into itself using one of the Unsafe types:
 
+```swift
+class FlattenedTree {
+  var data: [UInt8]  // TODO: is this the right kind of buffer?
+  var childrenStart: UnsafeRawPointer
+  var metadataStart: UnsafeRawPointer
 
-TODO: then integrate the below into the above
+  func copy() { /* ... */ }
+}
+```
 
-The `TriviallyDestroyable` protocol has no visible requirements, similar to the marker protocol `Sendable`.
+It would be incorrect to make a bit-for-bit copy of `FlattenedTree` because `childrenStart` is actually an absolute pointer into buffer stored in the same struct. Thus, copying the buffer correctly requires not only making a copy of these pointers, but re-calculating their addresses based on where the copy resides in memory.
+The author of `FlattenedTree` knows this so a conformance to `BitwiseCopyable` was not written on this type.
+But if automatic derivation were permitted for this type, users of the type may accidentially mis-use the type.
 
-Satisfying `TriviallyDestroyable` requires complete knowledge of all stored properties in the type.
-In particular, this means you cannot add retroactive conformances of `TriviallyDestroyable` to resilient types declared in a different module; only `@frozen` types from such modules are supported. Any kind of type defined within the same module can have retroactive conformances to `TriviallyDestroyable`.
+## Conforming to `BitwiseCopyable`
 
-The reference types, like `class` and `actor`, may be represented as automatically managed pointers, so they cannot conform to `TriviallyDestroyable`. This extends to `weak` and `unowned` storage containing such a reference type, as they still require bookkeeping during a copy. Only `unowned(unsafe)` is truly free of any safety and thus bookkeeping.
+The reference types, like `class` and `actor`, may be represented as automatically managed pointers, so they cannot conform to `BitwiseCopyable`. This extends to `weak` and `unowned` storage containing such a reference type, as they still require bookkeeping during a copy. Only `unowned(unsafe)` is truly free of any safety and thus bookkeeping, but will not be considered as `BitwiseCopyable` during automatic derivation.
 
-All function types are also reference types and thus they are not generally `TriviallyDestroyable`. There is only one exception: a `@convention(c)` function type in Swift is `TriviallyDestroyable`, as there is no management required for C function pointers.
+All function types are also reference types and thus they are not generally `BitwiseCopyable`. There is only one exception: a `@convention(c)` function type in Swift is `BitwiseCopyable`, as there is no management required for C function pointers.
 
 ### The primitive types
 
 <!-- Based on KnownStdlibTypes.def -->
 
 The following built-in types and kinds of values in Swift are considered to be 
-primitive, thus they implicitly satisfy `TriviallyDestroyable`:
+primitive, thus they implicitly satisfy `BitwiseCopyable`:
 
 - `Bool`
 - Any `@convention(c)` function.
@@ -143,7 +169,7 @@ primitive, thus they implicitly satisfy `TriviallyDestroyable`:
 - The fixed-precision floating-point types: 
   - `Float`, `Double`, `Float80`
 
-### Adding `TriviallyDestroyable` to existing standard library types
+### Adding `BitwiseCopyable` to existing standard library types
 
 The following protocol types in the standard library will gain the `BitwiseCopyable` 
 constraint:
@@ -152,7 +178,7 @@ constraint:
 - `_Pointer`
 - `SIMDStorage`, `SIMDScalar`, `SIMD`
 
-The following value types in the standard library will gain the `TriviallyDestroyable` 
+The following value types in the standard library will gain the `BitwiseCopyable` 
 constraint:
 
 - `StaticString`
@@ -168,14 +194,14 @@ constraint:
 
 ## Effect on ABI stability
 
-The addition of the `TriviallyDestroyable` constraint to a type in a library will not
+The addition of the `BitwiseCopyable` constraint to a type in a library will not
 cause an ABI break for users.
 
 ## Source compatibility
 
 This addition of a new protocol will not impact existing source code that does not use it. 
 
-<!-- There is a wrinkle in the source compatability story for `TriviallyDestroyable` types. Protocols in Swift typically do not define _negative_ requirements, i.e., that a kind of member does not exist. The `TriviallyDestroyable` protocol, in essence, defines an unbounded number of negative requirements.
+<!-- There is a wrinkle in the source compatability story for `BitwiseCopyable` types. Protocols in Swift typically do not define _negative_ requirements, i.e., that a kind of member does not exist. The `BitwiseCopyable` protocol, in essence, defines an unbounded number of negative requirements.
 
 A consequence of allowing retroactive conformances to non-resilient types defined in other modules is that a new kind of source compatability issue can appear. Suppose an API vendor conditionally includes a stored property for a type, say, depending on the platform:
 
@@ -191,12 +217,12 @@ A consequence of allowing retroactive conformances to non-resilient types define
 }
 ```
 
-For clients using this API, `Tree` can now only be made retroactively `TriviallyDestroyable` on some platforms:
+For clients using this API, `Tree` can now only be made retroactively `BitwiseCopyable` on some platforms:
 
 ```swift
 // only when compiling for macOS, this conformance is invalid,
-// because String is not TriviallyDestroyable!
-extension Tree: TriviallyDestroyable {}
+// because String is not BitwiseCopyable!
+extension Tree: BitwiseCopyable {}
 ```
 
 In this case, the conditions for when member is included can be mirrored on the client side with an `#if`-guard around the conformance. But, that's not always possible as the conditions can be arbitrary and unknown to clients. Thus, clients may be lulled into believing that their code is cross-platform, when it silently is not.
@@ -205,18 +231,18 @@ The only other protocol in Swift that expresses a negative requirement is `Senda
 
 ## Effect on API resilience
 
-Adding a `TriviallyDestroyable` constraint on a generic type will not cause an ABI break.
+Adding a `BitwiseCopyable` constraint on a generic type will not cause an ABI break.
 As with any protocol, the additional constraint can cause a source break for users.
 
 ## Alternatives considered
 
 Herein lies some modifications or additions left out of this proposal.
 
-### Require direct conformance to `TriviallyDestroyable`
+### Require direct conformance to `BitwiseCopyable`
 
-One solution to the Source Compatability problem described earlier is to disallow retroactive conformances to `TriviallyDestroyable` for types defined in a different module, even if they are non-resilient.
+One solution to the Source Compatability problem described earlier is to disallow retroactive conformances to `BitwiseCopyable` for types defined in a different module, even if they are non-resilient.
 
-In addition, various levels of relaxed checking for retroactive conformances, like an `@unchecked TriviallyDestroyable`, might be worth considering to allow clients to adopt the protocol when they are reasonably sure it is correct.
+In addition, various levels of relaxed checking for retroactive conformances, like an `@unchecked BitwiseCopyable`, might be worth considering to allow clients to adopt the protocol when they are reasonably sure it is correct.
 
 
 <!-- 
