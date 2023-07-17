@@ -61,29 +61,73 @@ Use-cases include:
 -->
 
 ## Proposed solution
+Ordinary type constraints, like a protocol, describe capabilities in the form of required members for a type, such as methods, computed properties, and nested types.
+The ability to copy or move a value of some type bit-for-bit is a capability derived from a conforming type's inherent memory layout.
+Thus, `BitwiseCopyable` and `BitwiseMovable` are proposed as a new kind of layout constraint.
 
-New type constraints `BitwiseCopyable` and `BitwiseMovable` are proposed for Swift that describe some characteristic of the value's representation in memory. This new kind of constraint is called a *layout constraint*. They work like usual type constraints in that you can constrain a generic parameter with `some BitwiseCopyable`, but you cannot form an existential of a layout constraint like `any BitwiseCopyable`. An existential erases type information and changes the representation of the underlying value to a universial boxed representation, so it is not the case that `any BitwiseCopyable` is itself bit-for-bit copyable.
 
+### Layout constraints
+A *layout constraint* describes characteristics of the value's representation in memory and is closely tied to the language's implementation details.
+Layout constraints work like usual type constraints in that you can constrain a generic parameter with `some BitwiseCopyable`.
+But a layout constraint does not contain any explicit requirements and conformances can be automatically derived.
 
- A nominal type satisfies either `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
+Conceptually, a layout constraint is similar to a marker protocol, but with some very important differences:
+
+- Like marker protocols, a layout constraint has no explicit requirements.
+- Marker protocols are entirely a compile-time notion, so they do not support dynamic casts with `is` and `as?`. In contrast, a layout constraint _does_ support such dynamic casts, as knowledge of the type's conformance is tracked at runtime.
+- A marker protocol cannot be used in a generic constraint for a conditional protocol conformance to a non-marker protocol. In contrast, TODO: what the heck is this from?
+- Conformance to a layout constraint can be derived automatically for a given value.
+
+By the nature of a layout constraint, complete knowledge of all stored properties in the type is required.
+This means you cannot add retroactive conformances to a layout constraint for a resilient type defined in a different module.
+In other words, only a `@frozen` type in a different module can be extended with a conformance to a layout constraint.
+But, any kind of type defined within the same module can be extended with a conformance to a layout constraint.
+
+### `BitwiseCopyable`
+A nominal type conforms to the layout constraint `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
 
 - Its type is implicitly `BitwiseCopyable`.
-- Its type satisfies `BitwiseCopyable`.
-- Its type is a tuple where all elements satisfy `BitwiseCopyable`.
+- Its type conforms to `BitwiseCopyable`.
+- Its type is a tuple where all elements are `BitwiseCopyable`.
 
-In the context of this proposal, a _primitive type_ is a built-in type defined by the language to never be represented by any managed pointers.
-This set of types include `Int` and `Double`. 
+The set of values that are implicitly `BitwiseCopyable` include:
 
-<!-- This proposal assumes the deinit must also not be explicitly defined. Happens to be the case today anyway since you can't define a deinit on these types. -->
+- `Bool`
+- The fixed-precision integer types:
+  - `Int8`, `Int16`, `Int32`, `Int64`, `Int`
+  - `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt`
+- The fixed-precision floating-point types: 
+  - `Float`, `Double`, `Float80`
+- Any `@convention(c)` function.
+- a stored property marked `unowned(unsafe)`
+- `StaticString`
+- The family of unmanaged pointer types:
+  - `OpaquePointer`
+  - `UnsafeRawPointer`, `UnsafeMutableRawPointer`
+  - `UnsafePointer`, `UnsafeMutablePointer`, `AutoreleasingUnsafeMutablePointer`
+  - `UnsafeBufferPointer`, `UnsafeMutableBufferPointer`
+  - `UnsafeRawBufferPointer`, `UnsafeMutableRawBufferPointer`
+  - `Unmanaged<T>`
+- the family of `SIMDx<Scalar>` types
 
-Satisfying `BitwiseCopyable` requires complete knowledge of all stored properties in the type.
-In particular, this means you cannot add retroactive conformances of `BitwiseCopyable` to resilient types declared in a different module; only `@frozen` types from such modules are supported. Any kind of type defined within the same module can have retroactive conformances to `BitwiseCopyable`.
+This list is not exhaustive. Future versions of Swift may treat other existing types as implicitly `BitwiseCopyable`. As a result, dynamic type casts like `CoolType is BitwiseCopyable` may change from yielding `false` to `true`.
 
-See Detailed design for the full list of types and additional minutiae. 
-
-By their nature, types satisfying `BitwiseCopyable` can support bit-for-bit copying:
+Types satisfying `BitwiseCopyable` can safely support bit-for-bit copying:
 
 TODO: example involving SE-370 that is now possible with BitwiseCopyable to answer the issues raised in the Motivation section.
+
+### `BitwiseMovable`
+Nearly all types conform to the layout constraint `BitwiseMovable`,
+unless any of the following are true:
+
+- Its type has an explicitly defined `deinit`.
+- It contains a `weak` reference to an object that either inherits from or can be cast to `NSObject`. In such cases, it is considered an Objective-C weak reference, which cannot be moved.
+
+An explicitly defined `deinit` is not permitted for a `BitwiseMovable` type, as it turns move-assignments into existing storage into non-trivial operations. The presence of a `deinit` means an existing value must be destroyed by invoking user-defined code prior to moving a new value into it.
+
+TODO: But don't class types require a decrement of the ref count if you move assign a different ref over-top? That'd mean all classes are not bit-wise movable. So what's the real reason to ban deinits here?
+
+TODO: examples of `weak` stored properties types that are NSObject or AnyObject which are not `BitwiseMovable`. That includes `Any` as well. So we ought to just make it "must be a concrete, native Swift type"
 
 ```swift
 func f() {
@@ -92,14 +136,26 @@ func f() {
 }
 ```
 
-TODO: everything but the following are BitwiseMovable:
+<!-- TODO: everything but the following are BitwiseMovable:
 - c++ types are movable, but not bitwise movable.
 - weak references are BitwiseMovable but not BitwiseCopyable
   - Swift weak references are BitwiseMovable but not BitwiseCopyable.
   - only difference is objc and swift weak refs, we don't differentiate in the type system between them.
 - pthread_mutex_t is not movable at all. x
-- not bitwise movable to internal pointers / llvm::SmallString goes from stack to heap allocated pointer.
+- not bitwise movable to internal pointers / llvm::SmallString goes from stack to heap allocated pointer. -->
 
+|                  | BitwiseCopyable | BitwiseMovable  |
+| -----------------|-----------------|-----------------|
+| strong           |      ❌         |       ✅         |
+| weak             |      ❌         | depends on type  |
+| unowned          |      ❌         |       ✅         |
+| unowned(unsafe)  |      ✅         |       ✅         |
+
+If 
+Otherwise, if the `weak` reference is to a native class or actor type, then the reference is `BitwiseMovable`.
+
+
+form an existential of a layout constraint like `any BitwiseCopyable`. An existential erases type information and changes the representation of the underlying value to a universial boxed representation, so it is not the case that `any BitwiseCopyable` is itself bit-for-bit copyable.
 
 ## Detailed design
 
@@ -201,14 +257,7 @@ All function types are also reference types and thus they are not generally `Bit
 The following built-in types and kinds of values in Swift are considered to be 
 primitive, thus they implicitly satisfy `BitwiseCopyable`:
 
-- `Bool`
-- Any `@convention(c)` function.
-- storage marked `unowned(unsafe)`
-- The fixed-precision integer types:
-  - `Int8`, `Int16`, `Int32`, `Int64`, `Int`
-  - `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt`
-- The fixed-precision floating-point types: 
-  - `Float`, `Double`, `Float80`
+
 
 ### Adding `BitwiseCopyable` to existing standard library types
 
@@ -222,15 +271,7 @@ constraint:
 The following value types in the standard library will gain the `BitwiseCopyable` 
 constraint:
 
-- `StaticString`
-- The family of unmanaged pointer types:
-  - `OpaquePointer`
-  - `UnsafeRawPointer`, `UnsafeMutableRawPointer`
-  - `UnsafePointer`, `UnsafeMutablePointer`, `AutoreleasingUnsafeMutablePointer`
-  - `UnsafeBufferPointer`, `UnsafeMutableBufferPointer`
-  - `UnsafeRawBufferPointer`, `UnsafeMutableRawBufferPointer`
-  - `Unmanaged<T>`
-- the family of `SIMDx<Scalar>` types
+
 
 
 ## Effect on ABI stability
