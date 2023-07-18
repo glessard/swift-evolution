@@ -4,7 +4,8 @@
 * Author: [Ding Ye](https://github.com/dingobye)
 * Review Manager: [Joe Groff](https://github.com/jckarter)
 * Status: **Previewing**
-* Implementation: [apple/swift#24766](https://github.com/apple/swift/pull/24766)
+* Implementation: [SE-0288 preview](https://github.com/apple/swift-se0288-is-power)
+* Previous Revision: ([1](https://github.com/apple/swift-evolution/blob/1e1223681a39aff58a8913f45e07acd7d2a96d82/proposals/0288-binaryinteger-ispower.md))
 * Decision Notes: [Rationale](https://forums.swift.org/t/accepted-se-0288-adding-ispower-of-to-binaryinteger/40325)
 
 ## Introduction
@@ -13,6 +14,13 @@ Checking some mathematical properties of integers (e.g. parity, divisibility, et
 
 Swift-evolution thread: [Pitch](https://forums.swift.org/t/adding-ispowerof2-to-binaryinteger/24087)
 
+#### Changes in this revision
+
+The function added to `BinaryInteger` is made generic on the type of its `base` parameter:
+
+`func isPowerOf(_ base: some BinaryInteger) -> Bool`
+
+This adds an efficiency for cases where `Self` is a large type (such as a `BigNum`), allowing the parameter to be as simple as an `Int`.
 
 ## Motivation
 
@@ -87,7 +95,7 @@ Our solution is to introduce a public API `isPower(of:)`, as an extension method
 ```swift
 // In the standard library
 extension BinaryInteger {
-    @inlinable public func isPower(of base: Self) -> Bool {
+    @inlinable public func isPower(of base: some BinaryInteger) -> Bool {
         // implementation described in Detailed Design section
     }
 }
@@ -103,7 +111,7 @@ let x: Int = Int.random(in: 0000..<0288)
 
 ## Detailed design
 
-A reference implementation can be found in [pull request #24766](https://github.com/apple/swift/pull/24766).  
+The updated design where the `isPower(of:)` function is generic on the type of its parameter has been under preview in https://github.com/apple/swift-se0288-is-power since September 2021.
 
 ### Overall Design
 
@@ -111,7 +119,7 @@ To make the API efficient for most use cases, the implementation is based on a f
 
 ```swift
 extension BinaryInteger {
-  @inlinable public func isPower(of base: Self) -> Bool {
+  @inlinable public func isPower(of base: some BinaryInteger) -> Bool {
     // Fast path when base is one of the common cases.
     if base == common_base_A { return self._isPowerOfCommonBaseA }
     if base == common_base_B { return self._isPowerOfCommonBaseB }
@@ -125,7 +133,8 @@ extension BinaryInteger {
   @inlinable internal var _isPowerOfCommonBaseB: Bool { /* optimized implementation */ }
   @inlinable internal var _isPowerOfCommonBaseC: Bool { /* optimized implementation */ }
   ...
-  @usableFromInline internal func _slowIsPower(of base: Self) ->  Bool { /* generic implementation */ }
+  @usableFromInline internal func _slowIsPower<Base: BinaryInteger>(of base: Base) ->  Bool { /* calls general implementation after matching input types */ }
+  @usableFromInline internal func _slowIsPower(of base :Self) -> Bool { /* general implementation */ }
 }
 ```
 Calling the public API `isPower(of: commonBaseK)` is expected to be as performant as directly calling the optimized version `_isPowerOfCommonBaseK`, if argument `commonBaseK` is a constant and the type `Self` is obvious enough (e.g. built-in integers) to the compiler to apply **constant-folding** to the `base == commonBaseK` expression, followed by a **simplify-cfg** transformation.
