@@ -20,7 +20,7 @@ The function added to `BinaryInteger` is made generic on the type of its `base` 
 
 `func isPowerOf(_ base: some BinaryInteger) -> Bool`
 
-This adds an efficiency for cases where `Self` is a large type (such as a `BigNum`), allowing the parameter to be as simple as an `Int`.
+This improves efficiency for cases where `Self` is a large type (such as a hypothetical `BigInt`), allowing the parameter to be not have to be the exact same type as `Self`.
 
 ## Motivation
 
@@ -111,7 +111,7 @@ let x: Int = Int.random(in: 0000..<0288)
 
 ## Detailed design
 
-The updated design where the `isPower(of:)` function is generic on the type of its parameter has been under preview in https://github.com/apple/swift-se0288-is-power since September 2021.
+This describes the design implemented in the SE-0288 [preview package](https://github.com/apple/swift-se0288-is-power).
 
 ### Overall Design
 
