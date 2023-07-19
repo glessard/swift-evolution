@@ -67,21 +67,30 @@ Thus, `BitwiseCopyable` and `BitwiseMovable` are proposed as a new kind of layou
 
 
 ### Layout constraints
-A *layout constraint* describes characteristics of the value's representation in memory and is closely tied to the language's implementation details.
+A *layout constraint* describes characteristics of the value's representation in memory and is closely tied to implementation details of the language.
 Layout constraints work like usual type constraints in that you can constrain a generic parameter with `some BitwiseCopyable`.
-But a layout constraint does not contain any explicit requirements and conformances can be automatically derived.
-
-Conceptually, a layout constraint is similar to a marker protocol, but with some very important differences:
+Conceptually, a layout constraint itself is similar to a marker protocol, but with some very important differences:
 
 - Like marker protocols, a layout constraint has no explicit requirements.
 - Marker protocols are entirely a compile-time notion, so they do not support dynamic casts with `is` and `as?`. In contrast, a layout constraint _does_ support such dynamic casts, as knowledge of the type's conformance is tracked at runtime.
-- A marker protocol cannot be used in a generic constraint for a conditional protocol conformance to a non-marker protocol. In contrast, TODO: what the heck is this from?
-- Conformance to a layout constraint can be derived automatically for a given value.
+- A marker protocol cannot be used in a generic constraint for a conditional protocol conformance to a non-marker protocol. In contrast, TODO: what the heck is this limitation from?
+- Conformance to a layout constraint can be derived automatically for a specific value of a type that itself does not explicitly state it conforms.
 
-By the nature of a layout constraint, complete knowledge of all stored properties in the type is required.
-This means you cannot add retroactive conformances to a layout constraint for a resilient type defined in a different module.
-In other words, only a `@frozen` type in a different module can be extended with a conformance to a layout constraint.
-But, any kind of type defined within the same module can be extended with a conformance to a layout constraint.
+#### Automatic derivation
+
+By the nature of a layout constraint, its conformances can only be determined if the type's storage can be _fully resolved_, which means that complete knowledge of all stored properties in the type is known.
+When a library author adds an explicit conformance to `BitwiseCopyable` directly on the type's declaration, its storage can always be fully resolved.
+
+But, when dealing with retroactive conformances (i.e., `extension Type: Constraint {}`), layout constraints have special rules because details of the _storage_ of a type is not always published in the interface of a type. So the location where retroactive conformance is declared matters in terms of resolving a layout constraint.
+This is not a new restriction, as the `Sendable` marker protocol has very similar restrictions.
+
+The location of a retroactive conformance matters because the existence of a private stored property is not published in the module's interface. 
+The module interface also does not specify whether a property is stored or not.
+The reason for this is that the members are inaccessible and a resilient type can freely change any property from being computed to being stored, without breaking users of the resilient library.
+
+Knowledge of all storage for a type is fundamentally in tension with the idea of resilience. If that information _were_ published in the module, it would severely limit the freedom of library authors to change the implementation of the resilient type.
+Thus, without the ability to fully resolve a type, it is impossible to know the type's layout in memory in order to determine if it is retroactively `BitwiseCopyable`, _etc_.
+But, a `@frozen` type's stored properties can be fully resolved, even from a different module, because complete knowledge of all stored properties is part of its interface in a module.
 
 ### `BitwiseCopyable`
 A nominal type conforms to the layout constraint `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
