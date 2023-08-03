@@ -32,20 +32,7 @@ TODO: Craft a motivating example using SE-370???
 TODO: two unsafe buffer pointers copy to and from instead of a loop for each element.
 want to optimize the code doing this stuff with memcpy.
 
-```swift
-func copyAll<T>(from: UnsafeBufferPointer<T>, to: UnsafeMutableBufferPointer<T>) {
-  // a manual implementation of `from.copyBytes(to: to)` ?
-
-  if val is BitwiseCopyable {
-    // do a memcpy with confidence.
-  } else {
-    // ... less optimized approach
-  }
-}
-
-```
-
-Other motvation: need this for evolution proposal to disallow casts to prevent casts from UnsafePointer to UnsafeRawPointer because the type is nontrivial.
+Other motivation: need this for evolution proposal to disallow casts to prevent casts from UnsafePointer to UnsafeRawPointer because the type is nontrivial.
 
 UnsafeRawPointer.storeBytes  ?
 
@@ -63,37 +50,18 @@ Use-cases include:
 ## Proposed solution
 Ordinary type constraints, like a protocol, describe capabilities in the form of required members for a type, such as methods, computed properties, and nested types.
 The ability to copy or move a value of some type bit-for-bit is a capability derived from a conforming type's inherent memory layout.
-Thus, `BitwiseCopyable` and `BitwiseMovable` are proposed as a new kind of layout constraint.
 
+Thus, `BitwiseCopyable` and `BitwiseMovable` are proposed as a new kind of layout protocol. A layout protocol is similar to a marker protocol in that it has no explicit requirements, but with additional properties:
 
-### Layout constraints
-A *layout constraint* describes characteristics of the value's representation in memory and is closely tied to implementation details of the language.
-Layout constraints work like usual type constraints in that you can constrain a generic parameter with `some BitwiseCopyable`.
-Conceptually, a layout constraint itself is similar to a marker protocol, but with some very important differences:
+- Layout protocols support the ability to query whether a type conforms at runtime.
+- Conformance to a layout protocol can be automatically derived in many more cases, such as for generic types.
 
-- Like marker protocols, a layout constraint has no explicit requirements.
-- Marker protocols are entirely a compile-time notion, so they do not support dynamic casts with `is` and `as?`. In contrast, a layout constraint _does_ support such dynamic casts, as knowledge of the type's conformance is tracked at runtime.
-- A marker protocol cannot be used in a generic constraint for a conditional protocol conformance to a non-marker protocol. In contrast, TODO: what the heck is this limitation from?
-- Conformance to a layout constraint can be derived automatically for a specific value of a type that itself does not explicitly state it conforms.
+<!-- Knowledge of all storage for a type is fundamentally in tension with the idea of resilience. If that information _were_ published in the module, it would severely limit the freedom of library authors to change the implementation of the resilient type.
+Thus, without the ability to fully resolve a type, it is impossible to know the type's layout in memory in order to determine if it is retroactively `BitwiseCopyable`, _etc_. -->
 
-#### Automatic derivation
-
-By the nature of a layout constraint, its conformances can only be determined if the type's storage can be _fully resolved_, which means that complete knowledge of all stored properties in the type is known.
-When a library author adds an explicit conformance to `BitwiseCopyable` directly on the type's declaration, its storage can always be fully resolved.
-
-But, when dealing with retroactive conformances (i.e., `extension Type: Constraint {}`), layout constraints have special rules because details of the _storage_ of a type is not always published in the interface of a type. So the location where retroactive conformance is declared matters in terms of resolving a layout constraint.
-This is not a new restriction, as the `Sendable` marker protocol has very similar restrictions.
-
-The location of a retroactive conformance matters because the existence of a private stored property is not published in the module's interface. 
-The module interface also does not specify whether a property is stored or not.
-The reason for this is that the members are inaccessible and a resilient type can freely change any property from being computed to being stored, without breaking users of the resilient library.
-
-Knowledge of all storage for a type is fundamentally in tension with the idea of resilience. If that information _were_ published in the module, it would severely limit the freedom of library authors to change the implementation of the resilient type.
-Thus, without the ability to fully resolve a type, it is impossible to know the type's layout in memory in order to determine if it is retroactively `BitwiseCopyable`, _etc_.
-But, a `@frozen` type's stored properties can be fully resolved, even from a different module, because complete knowledge of all stored properties is part of its interface in a module.
 
 ### `BitwiseCopyable`
-A nominal type conforms to the layout constraint `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
+A nominal type conforms to the layout protocol `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
 
 - Its type is implicitly `BitwiseCopyable`.
 - Its type conforms to `BitwiseCopyable`.
@@ -119,15 +87,27 @@ The set of values that are implicitly `BitwiseCopyable` include:
   - `Unmanaged<T>`
 - the family of `SIMDx<Scalar>` types
 
-This list is not exhaustive. Future versions of Swift may treat other existing types as implicitly `BitwiseCopyable`. As a result, dynamic type casts like `CoolType is BitwiseCopyable` may change from yielding `false` to `true`.
+This list is not exhaustive. Future versions of Swift may treat other existing types as implicitly `BitwiseCopyable`. As a result, dynamic type casts like `CoolType is BitwiseCopyable` may change from yielding `false` to `true`. But types that are `BitwiseCopyable` will never lose that conformance.
 
 Types satisfying `BitwiseCopyable` can safely support bit-for-bit copying:
 
-TODO: example involving SE-370 that is now possible with BitwiseCopyable to answer the issues raised in the Motivation section.
+```swift
+func copyAll<T>(from: UnsafeBufferPointer<T>, to: UnsafeMutableBufferPointer<T>) {
+  // a manual implementation of `from.copyBytes(to: to)` ?
+
+  if val is BitwiseCopyable {
+    // do a memcpy with confidence.
+    let size = MemoryLayout<T>.size
+    
+    // TODO: the other stuff
+  } else {
+    // ... less optimized approach
+  }
+}
+```
 
 ### `BitwiseMovable`
-Nearly all types conform to the layout constraint `BitwiseMovable`,
-unless any of the following are true:
+Nearly all types conform to the layout protocol `BitwiseMovable`, unless any of the following are true:
 
 - Its type has an explicitly defined `deinit`.
 - It contains a `weak` reference to an object that either inherits from or can be cast to `NSObject`. In such cases, it is considered an Objective-C weak reference, which cannot be moved.
@@ -164,13 +144,38 @@ If
 Otherwise, if the `weak` reference is to a native class or actor type, then the reference is `BitwiseMovable`.
 
 
-form an existential of a layout constraint like `any BitwiseCopyable`. An existential erases type information and changes the representation of the underlying value to a universial boxed representation, so it is not the case that `any BitwiseCopyable` is itself bit-for-bit copyable.
+form an existential of a layout protocol like `any BitwiseCopyable`. An existential erases type information and changes the representation of the underlying value to a universial boxed representation, so it is not the case that `any BitwiseCopyable` is itself bit-for-bit copyable.
 
 ## Detailed design
 
+### Layout protocols
+A *layout protocols* describes characteristics of the value's representation in memory and is closely tied to implementation details of the language.
+Layout protocols work like usual type constraints in that you can constrain a generic parameter with `some BitwiseCopyable`.
+Conceptually, a layout protocol itself is similar to a marker protocol, but with some very important differences:
+
+- Marker protocols are entirely a compile-time notion, so they do not support dynamic casts with `is` and `as?`. In contrast, a layout protocol _does_ support such dynamic casts, as knowledge of the type's conformance is tracked at runtime.
+  - Layout protocols can support efficient dynamic type tests because they're statically known to not have any explicit requirements.
+- Conformance to a layout protocol can be derived automatically for a specific value of a type that itself does not explicitly state it conforms.
+- A marker protocol cannot be used in a generic constraint for a conditional protocol conformance to a non-marker protocol. In contrast, TODO: what the heck is this limitation from? Do layout protocols need this since it has runtime information?
+
+Otherwise, a layout protocol has the same restrictions as a marker protocol, such as:
+
+- A non-final class cannot conform to a layout protocol. A subclass can add new stored properties that change the type's layout, so only a class with no possible subclasses can conform to a layout protocol.
+
+#### Automatic derivation
+
+By the nature of a layout protocol, its conformances can only be determined if the type's storage can be _fully resolved_, which means that complete knowledge of all stored properties in the type is known.
+When a library author adds an explicit conformance to `BitwiseCopyable` directly on the type's declaration, its storage can always be fully resolved.
+
+But, when dealing with retroactive conformances (i.e., `extension Type: Constraint {}`), layout protocols have special rules because details of the _storage_ of a type is not always published in the interface of a module. Some members are not specified because they are inaccessible or the type is resilient, which means the library author can freely change a property from being computed to being stored, without breaking users.
+
+Thus, the location of a retroactive conformance to a layout protocol matters because the type's layout information may not be available to the module containing the retroactive conformance. But, a `@frozen` type's stored properties can be fully resolved, even from a different module, because complete knowledge of all stored properties is part of its interface in a module.
+
+This is not a new phenomenon, as the `Sendable` marker protocol has a very similar restriction in place because of the lack of ability to fully resolve some types. Retroactive conformances to `Sendable` are only permitted in the same file defining the type.
+
 The `BitwiseCopyable` protocol has no visible requirements, similar to the marker protocol `Sendable`.
-There are two key differences between a layout constraint and a marker protocol. 
-The first is that a layout constraint has runtime metadata associated with it to support dynamic casts:
+There are two key differences between a layout protocol and a marker protocol. 
+The first is that a layout protocol has runtime metadata associated with it to support dynamic casts:
 
 ```swift
 func copyFromAnyInto(_ val: Any, _ pointer: UnsafeMutableRawPointer) {
@@ -182,11 +187,11 @@ func copyFromAnyInto(_ val: Any, _ pointer: UnsafeMutableRawPointer) {
 }
 ```
 
-The second difference is that whether a type satisfies a layout constraint can be automatically derived by the compiler.
+The second difference is that whether a type satisfies a layout protocol can be automatically derived by the compiler.
 
 ## Automatic derivation of `BitwiseCopyable`
 
-A type does not always have to explicitly declare that it satisfies the layout constraint `BitwiseCopyable` in some cases:
+A type does not always have to explicitly declare that it satisfies the layout protocol `BitwiseCopyable` in some cases:
 
 - The type is marked `@frozen`
 - The type is defined in the same module where a value of the type requires `BitwiseCopyable`
