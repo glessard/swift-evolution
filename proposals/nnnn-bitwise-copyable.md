@@ -5,6 +5,14 @@
 * Review Manager: TBD
 * Status: **Awaiting implementation**
 
+- BitwiseCopyable and BitwiseMovable cannot be used an existential
+- x is BWC and friends (dynamic casts) are not permitted. You need to use MemoryLayout<T>.isBitwiseCopyable.
+- BWM _does_ support deinits. BWC does _not_ support deinits.
+- Separate the RecursiveProperties computation from TypeConverter from its production of a TypeLowering to solve the cyclic dependency issue.
+- if <T: BitwiseCopyable> { pointerToT.loadUnaligned(...) }
+- Andy wants BWC available in the public interfaces of APIs. Look for isPOD tests. 
+
+
 <!-- *During the review process, add the following fields as needed:*
 
 * Implementation: [apple/swift#NNNNN](https://github.com/apple/swift/pull/NNNNN) or [apple/swift-evolution-staging#NNNNN](https://github.com/apple/swift-evolution-staging/pull/NNNNN)
@@ -91,17 +99,25 @@ This list is not exhaustive. Future versions of Swift may treat other existing t
 
 Types satisfying `BitwiseCopyable` can safely support bit-for-bit copying:
 
-```swift
-func copyAll<T>(from: UnsafeBufferPointer<T>, to: UnsafeMutableBufferPointer<T>) {
-  // a manual implementation of `from.copyBytes(to: to)` ?
+<!-- 
+T.self is BitwiseCopyable.Type
+-->
 
-  if val is BitwiseCopyable {
-    // do a memcpy with confidence.
-    let size = MemoryLayout<T>.size
-    
-    // TODO: the other stuff
+```swift
+func copyAll<T>(from: UnsafeBufferPointer<T>, 
+                to: UnsafeMutableBufferPointer<T>) {
+  guard from.count <= to.count else { fatalError("destination too small") }
+
+  if MemoryLayout<T>.isBitwiseCopyable {
+    // We know it is safe to quickly memcpy this data as raw bytes!
+    let fromRaw = UnsafeRawBufferPointer(from)
+    let toRaw = UnsafeMutableRawBufferPointer(to)
+    toRaw.copyMemory(from: fromRaw)  // effectively does a memcpy
   } else {
-    // ... less optimized approach
+    // Generally perform the copy.
+    for i in 0..<from.count {
+      to[i] = from[i]
+    }
   }
 }
 ```
@@ -109,7 +125,7 @@ func copyAll<T>(from: UnsafeBufferPointer<T>, to: UnsafeMutableBufferPointer<T>)
 ### `BitwiseMovable`
 Nearly all types conform to the layout protocol `BitwiseMovable`, unless any of the following are true:
 
-- Its type has an explicitly defined `deinit`.
+- Its type is from C++ and it has a non-trivial move constructor??
 - It contains a `weak` reference to an object that either inherits from or can be cast to `NSObject`. In such cases, it is considered an Objective-C weak reference, which cannot be moved.
 
 An explicitly defined `deinit` is not permitted for a `BitwiseMovable` type, as it turns move-assignments into existing storage into non-trivial operations. The presence of a `deinit` means an existing value must be destroyed by invoking user-defined code prior to moving a new value into it.
