@@ -1,14 +1,10 @@
-# BitwiseCopyable and BitwiseMovable
+# BitwiseCopyable
 
 * Proposal: [SE-NNNN](NNNN-filename.md)
 * Authors: [Kavon Farvardin](https://github.com/kavon)
 * Review Manager: TBD
-* Status: **Awaiting implementation**
+* Implementation: On `main` gated behind `-enable-experimental-feature BitwiseCopyable`
 
-- BitwiseCopyable and BitwiseMovable cannot be used an existential
-- x is BWC and friends (dynamic casts) are not permitted. You need to use MemoryLayout<T>.isBitwiseCopyable.
-- BWM _does_ support deinits. BWC does _not_ support deinits.
-- Separate the RecursiveProperties computation from TypeConverter from its production of a TypeLowering to solve the cyclic dependency issue.
 - if <T: BitwiseCopyable> { pointerToT.loadUnaligned(...) }
 - Andy wants BWC available in the public interfaces of APIs. Look for isPOD tests. 
 
@@ -27,8 +23,8 @@ All values of generic type in Swift today support basic capabilities of being co
 These routines are needed in-part because references can appear anywhere within the underlying concrete value and those references require extra bookkeeping during a copy or destroy.
 But when working with a value of concrete type, Swift can take advantage of knowledge that a value does not contain references, skipping the extra work and performing a simple bit-for-bit copy ("memcpy") or a no-operation destruction.
 
-This proposal defines new constraints `BitwiseCopyable` and `BitwiseMovable` to describe generic values that support these simple kinds of operations.
-One of the key use-cases for these constraint is to provide safety and performance for low-level code, such those dealing with foreign-function interfaces and serialization.
+This proposal defines a new marker protocol `BitwiseCopyable` to describe generic values that support these simple operations.
+One of the key use-cases for this constraint is to provide safety and performance for low-level code, such that dealing with foreign-function interfaces and serialization.
 For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`). The term _trivial_ in that proposal corresponds to the `BitwiseCopyable` constraint discussed here.
 
 ## Motivation
@@ -56,26 +52,19 @@ Use-cases include:
 -->
 
 ## Proposed solution
+
 Ordinary type constraints, like a protocol, describe capabilities in the form of required members for a type, such as methods, computed properties, and nested types.
-The ability to copy or move a value of some type bit-for-bit is a capability derived from a conforming type's inherent memory layout.
+The ability to copy a value of some type bit-for-bit is a fact about a conforming type's memory layout.
+A type's layout, however, may change as a library evolves.
 
-Thus, `BitwiseCopyable` and `BitwiseMovable` are proposed as a new kind of layout protocol. A layout protocol is similar to a marker protocol in that it has no explicit requirements, but with additional properties:
+Thus, `BitwiseCopyable` is proposed as a new marker protocol.  
+The compiler will automatically derive conformance to the protocol in many cases.
+And even when conformance of a type to the protocol is declared manually, the compiler will check that its fields are all bitwise copyable.
 
-- Layout protocols support the ability to query whether a type conforms at runtime.
-- Conformance to a layout protocol can be automatically derived in many more cases, such as for generic types.
+A nominal type conforms to the protocol `BitwiseCopyable` if it is an non-resilient, escapable, copyable struct or enum all of whose stored properties or associated values satisfy conform to `BitwiseCopyable`.
 
-<!-- Knowledge of all storage for a type is fundamentally in tension with the idea of resilience. If that information _were_ published in the module, it would severely limit the freedom of library authors to change the implementation of the resilient type.
-Thus, without the ability to fully resolve a type, it is impossible to know the type's layout in memory in order to determine if it is retroactively `BitwiseCopyable`, _etc_. -->
-
-
-### `BitwiseCopyable`
-A nominal type conforms to the layout protocol `BitwiseCopyable` if it is a copyable struct or enum where all of its stored properties or associated values satisfy at least one of the following requirements:
-
-- Its type is implicitly `BitwiseCopyable`.
-- Its type conforms to `BitwiseCopyable`.
-- Its type is a tuple where all elements are `BitwiseCopyable`.
-
-The set of values that are implicitly `BitwiseCopyable` include:
+Many types in the standard library will gain a conformance to the protocol.  
+The list of standard library types that will be `BitwiseCopyable` include:
 
 - `Bool`
 - The fixed-precision integer types:
@@ -83,6 +72,7 @@ The set of values that are implicitly `BitwiseCopyable` include:
   - `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt`
 - The fixed-precision floating-point types: 
   - `Float`, `Double`, `Float80`
+- the family of `SIMDx<Scalar>` types
 - Any `@convention(c)` function.
 - a stored property marked `unowned(unsafe)`
 - `StaticString`
@@ -93,192 +83,133 @@ The set of values that are implicitly `BitwiseCopyable` include:
   - `UnsafeBufferPointer`, `UnsafeMutableBufferPointer`
   - `UnsafeRawBufferPointer`, `UnsafeMutableRawBufferPointer`
   - `Unmanaged<T>`
-- the family of `SIMDx<Scalar>` types
+  - `Optional<T>` when `T` is `BitwiseCopyable`
 
-This list is not exhaustive. Future versions of Swift may treat other existing types as implicitly `BitwiseCopyable`. As a result, dynamic type casts like `CoolType is BitwiseCopyable` may change from yielding `false` to `true`. But types that are `BitwiseCopyable` will never lose that conformance.
+This list is not exhaustive. Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have conformed to `BitwiseCopyable` will never lose that conformance.
 
 Types satisfying `BitwiseCopyable` can safely support bit-for-bit copying:
 
-<!-- 
-T.self is BitwiseCopyable.Type
--->
-
 ```swift
-func copyAll<T>(from: UnsafeBufferPointer<T>, 
-                to: UnsafeMutableBufferPointer<T>) {
+func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>, 
+                                  to: UnsafeMutableBufferPointer<T>) {
   guard from.count <= to.count else { fatalError("destination too small") }
-
-  if MemoryLayout<T>.isBitwiseCopyable {
-    // We know it is safe to quickly memcpy this data as raw bytes!
-    let fromRaw = UnsafeRawBufferPointer(from)
-    let toRaw = UnsafeMutableRawBufferPointer(to)
-    toRaw.copyMemory(from: fromRaw)  // effectively does a memcpy
-  } else {
-    // Generally perform the copy.
-    for i in 0..<from.count {
-      to[i] = from[i]
-    }
-  }
+  // We know it is safe to quickly memcpy this data as raw bytes!
+  let fromRaw = UnsafeRawBufferPointer(from)
+  let toRaw = UnsafeMutableRawBufferPointer(to)
+  toRaw.copyMemory(from: fromRaw)  // effectively, a memcpy
 }
 ```
-
-### `BitwiseMovable`
-Nearly all types conform to the layout protocol `BitwiseMovable`, unless any of the following are true:
-
-- Its type is from C++ and it has a non-trivial move constructor??
-- It contains a `weak` reference to an object that either inherits from or can be cast to `NSObject`. In such cases, it is considered an Objective-C weak reference, which cannot be moved.
-
-An explicitly defined `deinit` is not permitted for a `BitwiseMovable` type, as it turns move-assignments into existing storage into non-trivial operations. The presence of a `deinit` means an existing value must be destroyed by invoking user-defined code prior to moving a new value into it.
-
-TODO: But don't class types require a decrement of the ref count if you move assign a different ref over-top? That'd mean all classes are not bit-wise movable. So what's the real reason to ban deinits here?
-
-TODO: examples of `weak` stored properties types that are NSObject or AnyObject which are not `BitwiseMovable`. That includes `Any` as well. So we ought to just make it "must be a concrete, native Swift type"
-
-```swift
-func f() {
-  weak let x = H()
-  weak let y = x
-}
-```
-
-<!-- TODO: everything but the following are BitwiseMovable:
-- c++ types are movable, but not bitwise movable.
-- weak references are BitwiseMovable but not BitwiseCopyable
-  - Swift weak references are BitwiseMovable but not BitwiseCopyable.
-  - only difference is objc and swift weak refs, we don't differentiate in the type system between them.
-- pthread_mutex_t is not movable at all. x
-- not bitwise movable to internal pointers / llvm::SmallString goes from stack to heap allocated pointer. -->
-
-|                  | BitwiseCopyable | BitwiseMovable  |
-| -----------------|-----------------|-----------------|
-| strong           |      ❌         |       ✅         |
-| weak             |      ❌         | depends on type  |
-| unowned          |      ❌         |       ✅         |
-| unowned(unsafe)  |      ✅         |       ✅         |
-
-If 
-Otherwise, if the `weak` reference is to a native class or actor type, then the reference is `BitwiseMovable`.
-
-
-form an existential of a layout protocol like `any BitwiseCopyable`. An existential erases type information and changes the representation of the underlying value to a universial boxed representation, so it is not the case that `any BitwiseCopyable` is itself bit-for-bit copyable.
 
 ## Detailed design
 
-### Layout protocols
-A *layout protocols* describes characteristics of the value's representation in memory and is closely tied to implementation details of the language.
-Layout protocols work like usual type constraints in that you can constrain a generic parameter with `some BitwiseCopyable`.
-Conceptually, a layout protocol itself is similar to a marker protocol, but with some very important differences:
-
-- Marker protocols are entirely a compile-time notion, so they do not support dynamic casts with `is` and `as?`. In contrast, a layout protocol _does_ support such dynamic casts, as knowledge of the type's conformance is tracked at runtime.
-  - Layout protocols can support efficient dynamic type tests because they're statically known to not have any explicit requirements.
-- Conformance to a layout protocol can be derived automatically for a specific value of a type that itself does not explicitly state it conforms.
-- A marker protocol cannot be used in a generic constraint for a conditional protocol conformance to a non-marker protocol. In contrast, TODO: what the heck is this limitation from? Do layout protocols need this since it has runtime information?
-
-Otherwise, a layout protocol has the same restrictions as a marker protocol, such as:
-
-- A non-final class cannot conform to a layout protocol. A subclass can add new stored properties that change the type's layout, so only a class with no possible subclasses can conform to a layout protocol.
-
-#### Automatic derivation
-
-By the nature of a layout protocol, its conformances can only be determined if the type's storage can be _fully resolved_, which means that complete knowledge of all stored properties in the type is known.
-When a library author adds an explicit conformance to `BitwiseCopyable` directly on the type's declaration, its storage can always be fully resolved.
-
-But, when dealing with retroactive conformances (i.e., `extension Type: Constraint {}`), layout protocols have special rules because details of the _storage_ of a type is not always published in the interface of a module. Some members are not specified because they are inaccessible or the type is resilient, which means the library author can freely change a property from being computed to being stored, without breaking users.
-
-Thus, the location of a retroactive conformance to a layout protocol matters because the type's layout information may not be available to the module containing the retroactive conformance. But, a `@frozen` type's stored properties can be fully resolved, even from a different module, because complete knowledge of all stored properties is part of its interface in a module.
-
-This is not a new phenomenon, as the `Sendable` marker protocol has a very similar restriction in place because of the lack of ability to fully resolve some types. Retroactive conformances to `Sendable` are only permitted in the same file defining the type.
-
-The `BitwiseCopyable` protocol has no visible requirements, similar to the marker protocol `Sendable`.
-There are two key differences between a layout protocol and a marker protocol. 
-The first is that a layout protocol has runtime metadata associated with it to support dynamic casts:
-
-```swift
-func copyFromAnyInto(_ val: Any, _ pointer: UnsafeMutableRawPointer) {
-  if val is BitwiseCopyable {
-    // do a memcpy with confidence.
-  } else {
-    // ... less optimized approach
-  }
-}
-```
-
-The second difference is that whether a type satisfies a layout protocol can be automatically derived by the compiler.
-
 ## Automatic derivation of `BitwiseCopyable`
 
-A type does not always have to explicitly declare that it satisfies the layout protocol `BitwiseCopyable` in some cases:
+Generally, automatic derivation of `BitwiseCopyable` occurs in the same situations as automatic derivation of `Sendable`.  Aggregates (structs and enums) that are local to a module enjoy automatic deriviation if all of their components (fields and associated values, respectively) conform.  The same applies to `@frozen` types exported from a module.  Finally, conformance is not derived automatically on a conditional basis.
 
-- The type is marked `@frozen`
-- The type is defined in the same module where a value of the type requires `BitwiseCopyable`
+In a bit more detail: a struct's conformance is automatically derived if all of its fields conforms.  For example, the struct
 
-For example:
-
-```swift
-// Defined in module A
+```
 struct Coordinate {
   var x: Int
   var y: Int
 }
-
-func copyInto<T: BitwiseCopyable>(_ t: T, _ pointer: UnsafeMutableRawPointer) { /* ... */ }
-
-// Call appears in module A
-copyInto(Coordinate(), pointer) // OK
-```
-A limited form of this kind of derviation occurs for determining whether a type is `Sendable`, but `BitwiseCopyable` goes further to handle generic types like `Optional<T>`:
-
-```swift
-let x: Optional<AnyObject> = nil
-let y: Optional<Coordinate> = nil
-
-copyInto(x, pointer) // error: Optional<AnyObject> does not satisfy BitwiseCopyable
-copyInto(y, pointer) // OK
 ```
 
-Specifically, for a generic struct or enum, the decision procedure is performed ad-hoc only when all generic parameters are bound to a type:
+conforms because both of its fields, `x` and `y` both conform (`Int` is `BitwiseCopyable`).  The same is true for an enum like `(x: Int, y: Int)`.
 
-```swift
-struct MyGenericType<T> {
-  var prop: T
+Similarly, an enum's conformance is automatically derived if all of its associated values conform.  For example, the enum
+
+```
+enum Change {
+  case initial(Coordinate)
+  case update(Vector)
 }
-
-func copyGeneric<Elm>(_ z: MyGenericType<Elm>) 
-  where Elm: BitwiseCopyable {
-  copyInto(z, pointer) // error: function 'copyInto' requires that 'MyGenericType<T>' conform to 'BitwiseCopyable'
-}
-
-let fullyBound: MyGenericType<Int> =  // ...
-copyInto(fullyBound, pointer) // OK
 ```
 
-In this example, `Elm` is an unbound generic type within the body of `copyGeneric`, so a call to `copyInto` passed a value of type `MyGenericType<Elm>` will not trigger a derivation of `BitwiseCopyable`, despite `Elm` being constrained to `BitwiseCopyable`.
+because `Coordinate` and `Vector` both conform to `BitwiseCopyable`.
 
-Automatic derivation proceeds using a very similar recursive decision procedure as for proving a type satisfies `BitwiseCopyable`.
-The only difference is that types with an explicitly `@unchecked BitwiseCopyable` conformance are not considered to be `BitwiseCopyable` during derivation.
+The same applies for generic types.  Conformance of this struct
+
+```
+struct Pair<Value : BitwiseCopyable> {
+  var first: Value
+  var second: Value
+}
+```
+
+to `BitwiseCopyable` is derived automatically because both fields `first` and `second` are `BitwiseCopyable` because `Value` is constrained to conform to it.
+
+On the other hand, conformance would _not_ be derived if `Value` were not constrained in this way.  _No_ conformance is automatically derived for the following struct
+
+```
+struct Pair2<Value> {
+  var first: Value
+  var second: Value
+}
+```
+
+The reason is that neither `first` nor `second` conforms to `BitwiseCopyable` since `Value` is unconstrained.  While this type can be conformed to `BitwiseCopyable` on a conditional basis
+
+```
+extension Pair2 : BitwiseCopyable where Value : BitwiseCopyable {}
+```
+
+such a conformance must be written manually.  Another proposal could lift that restriction (see Future Directions).
+
+Another case where conformance is not automatically derived is for non-`@frozen` public types.  For example, the following type
+
+```
+public struct Coordinate2 {
+  var x: Int
+  var y: Int
+}
+```
+
+would not enjoy automatic derivation, despite the fact that both of its fields are `BitwiseCopyable`.  Because the type may change in the future, adding fields that are not `BitwiseCopyable`, the compiler will not conform the type automatically.  Nevertheless, you can add a conformance manually:
+
+```
+extension Coordinate2 : BitwiseCopyable {}
+```
+
+Declaring that the type conforms is a promise that the type will remain `BitwiseCopyable` regardless of the fields that are added or removed from it.
+
+Alternatively, if the type will never change, it can be marked `@frozen`
+
+```
+@frozen
+public struct Coordinate2 {
+  var x: Int
+  var y: Int
+}
+```
+
+In this case, conformance will once again be automatically derived because both fields are `BitwiseCopyable`.
+
+The only exception is that types with an explicitly `@unchecked` conformance to `BitwiseCopyable` are not considered to be `BitwiseCopyable` during derivation.
 The family of Unsafe types in the Swift standard library have an `@unchecked BitwiseCopyable` conformance.
 Excluding such types during automatic derivation helps ensure that using unsafe constructs remains explicitly opt-in rather than implicit.
 Take for example a type that keeps an internal pointer into itself using one of the Unsafe types:
 
 ```swift
 struct FlattenedTree {
-  var data: [UInt8]  // TODO: is this the right kind of buffer?
-  var childrenStart: UnsafeRawPointer
-  var metadataStart: UnsafeRawPointer
+  var data: Buffer<UInt8>
+  var childrenStart: UnsafeRawPointer<UInt8>
+  var metadataStart: UnsafeRawPointer<UInt8>
 
   func copy() { /* ... */ }
 }
 ```
 
-It would be incorrect to make a bit-for-bit copy of `FlattenedTree` because `childrenStart` is actually an absolute pointer into buffer stored in the same struct. Thus, copying the buffer correctly requires not only making a copy of these pointers, but re-calculating their addresses based on where the copy resides in memory.
-The author of `FlattenedTree` knows this so a conformance to `BitwiseCopyable` was not written on this type.
+It would be incorrect to make a bit-for-bit copy of `FlattenedTree` because `childrenStart` is actually an absolute pointer into buffer stored in the same struct.  
+Copying the buffer correctly requires not only making a copy of these pointers, but re-calculating their addresses based on where the copy resides in memory.
+The author of `FlattenedTree` knows this, so a conformance to `BitwiseCopyable` was not written on this type.
 But if automatic derivation were permitted for this type, users of the type may accidentially mis-use the type.
 
 ## Conforming to `BitwiseCopyable`
 
 The reference types, like `class` and `actor`, may be represented as automatically managed pointers, so they cannot conform to `BitwiseCopyable`. This extends to `weak` and `unowned` storage containing such a reference type, as they still require bookkeeping during a copy. Only `unowned(unsafe)` is truly free of any safety and thus bookkeeping, but will not be considered as `BitwiseCopyable` during automatic derivation.
 
-All function types are also reference types and thus they are not generally `BitwiseCopyable`. There is only one exception: a `@convention(c)` function type in Swift is `BitwiseCopyable`, as there is no management required for C function pointers.
+Function types are also reference types and thus they are not generally `BitwiseCopyable`. There are only two exception: `@convention(c)` and `@convention(thin)` function types in Swift are `BitwiseCopyable` because there is no reference counted capture context associated with such functions.
 
 ### The primitive types
 
@@ -345,6 +276,12 @@ The only other protocol in Swift that expresses a negative requirement is `Senda
 
 Adding a `BitwiseCopyable` constraint on a generic type will not cause an ABI break.
 As with any protocol, the additional constraint can cause a source break for users.
+
+## Future Directions
+
+* Conditional inference
+* MemoryLayout<T>.isBitwiseCopyable
+* BitwiseMovable
 
 ## Alternatives considered
 
