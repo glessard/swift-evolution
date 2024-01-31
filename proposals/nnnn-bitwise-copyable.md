@@ -64,28 +64,11 @@ And even when conformance of a type to the protocol is declared manually, the co
 A nominal type conforms to the protocol `BitwiseCopyable` if it is an non-resilient, escapable, copyable struct or enum all of whose stored properties or associated values satisfy conform to `BitwiseCopyable`.
 
 Many types in the standard library will gain a conformance to the protocol.  
-The list of standard library types that will be `BitwiseCopyable` include:
-
-- `Bool`
-- The fixed-precision integer types:
-  - `Int8`, `Int16`, `Int32`, `Int64`, `Int`
-  - `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt`
-- The fixed-precision floating-point types: 
-  - `Float`, `Double`, `Float80`
-- the family of `SIMDx<Scalar>` types
-- Any `@convention(c)` function.
-- a stored property marked `unowned(unsafe)`
-- `StaticString`
-- The family of unmanaged pointer types:
-  - `OpaquePointer`
-  - `UnsafeRawPointer`, `UnsafeMutableRawPointer`
-  - `UnsafePointer`, `UnsafeMutablePointer`, `AutoreleasingUnsafeMutablePointer`
-  - `UnsafeBufferPointer`, `UnsafeMutableBufferPointer`
-  - `UnsafeRawBufferPointer`, `UnsafeMutableRawBufferPointer`
-  - `Unmanaged<T>`
-  - `Optional<T>` when `T` is `BitwiseCopyable`
-
-This list is not exhaustive. Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have conformed to `BitwiseCopyable` will never lose that conformance.
+The list of standard library types that will be `BitwiseCopyable` includes
+- numeric types such as the integer types, the floating-point types, and the SIMD types.
+- the pointer types
+- optional, conditionally.
+This list is not exhaustive (see Detailed design). Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have conformed to `BitwiseCopyable` will never lose that conformance.
 
 Types satisfying `BitwiseCopyable` can safely support bit-for-bit copying:
 
@@ -102,11 +85,87 @@ func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>,
 
 ## Detailed design
 
-## Automatic derivation of `BitwiseCopyable`
+A type may conform to `BitwiseCopyable` whenever it is merely an aggregation of values which are themselves `BitwiseCopyable`.
+When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregation.
+If it is not, diagnostics are emitted.
+Much of the time, the compiler will automatically generate these conformances for such aggregations (see [Automatic derivation of `BitwiseCopyable`](#automatic-derivation)).
 
-Generally, automatic derivation of `BitwiseCopyable` occurs in the same situations as automatic derivation of `Sendable`.  Aggregates (structs and enums) that are local to a module enjoy automatic deriviation if all of their components (fields and associated values, respectively) conform.  The same applies to `@frozen` types exported from a module.  Finally, conformance is not derived automatically on a conditional basis.
+## Explicit conformance of `BitwiseCopyable`
 
-In a bit more detail: a struct's conformance is automatically derived if all of its fields conforms.  For example, the struct
+When a nominal type is declared to conform to `BitwiseCopyable`, the compiler will check that the type is in fact "bitwise copyable".
+
+Any type that involves reference counting is not "bitwise copyable".
+All reference types are reference counted.
+So nominal reference types--classes and actors--cannot be conformed.
+
+That leaves only structs and enums, both of which can conform to `BitwiseCopyable`--so long as the types they aggregate together are themselves bitwise copyable.
+By definition, all types that conform to `BitwiseCopyable` are bitwise copyable.
+So types all of whose fields are of types which conform to `BitwiseCopyable` can themselves be conformed to the protocol.
+
+And numerous standard library types (see [Existing standard library types](extending-existing-stdlib-types)) conform to the protocol.
+One such conforming type from the standard library is `Int`.
+
+Which means that the struct
+
+```
+public struct Point : BitwiseCopyable {
+  var x: Int
+  var y: Int
+}
+```
+
+can be conformed to `BitwiseCopyable`.
+Why?
+Because both of its fields `x` and `y` are of type `Int` which conforms to `BitwiseCopyable` and which consequently are bitwise copyable.
+
+Similarly, the enum
+
+```
+public enum Simplex : BitwiseCopyable {
+case zero
+case one(Int)
+case two(Int, Int)
+}
+```
+
+can be conformed to `BitwiseCopyable`.
+The enum has two associated values: `Int` and `(Int, Int)`.
+As discussed, the former conforms to `BitwiseCopyable`.  
+The latter does too because it's a tuple both of whose elements conform (see [Builtin module changes](builtin-module-changes)).
+
+An aggregate which contains any sort of managed reference to a reference type cannot conform to `BitwiseCopyable`.
+That includes strong, `weak`, and `unowned` references.
+It does _not_ include `unowned(unsafe)` references however.
+As a result, an aggregate which contains such a field can still conform:
+
+```
+public struct UnsafeWrapper : BitwiseCopyable {
+  unowned(unsafe) var value: AnyObject
+}
+```
+
+Function types are also reference types and thus they are not generally `BitwiseCopyable`. There are two exceptions: `@convention(c)` and `@convention(thin)` function types in Swift are `BitwiseCopyable` because there is no reference counted capture context associated with such functions.
+
+Classes 
+
+## Automatic derivation of `BitwiseCopyable`<a name="automatic-derivation"/>
+
+In many cases, the compiler will automatically derive a type's conformance to `BitwiseCopyable`.  
+The automatic derivation to `BitwiseCopyable` is mostly analogous to the automatic derivation to `Sendable`.
+Aggregates (structs and enums) that are local to a module enjoy automatic deriviation if all of their components (fields and associated values, respectively) conform.  
+The same applies to `@frozen` types exported from a module.  
+Finally, conformance is not derived automatically on a conditional basis.
+The only exception is for fields whose conformance is `@unchecked`.
+
+### Unexported aggregates
+
+The fundamental automatic derivation behavior--to which there are a few exceptions--is the behavior for aggregates which aren't exported from a module, described below.
+
+#### Struct conformance
+
+Given an unexported struct `S`, the compiler will automatically derive a conformance of `S` to `BitwiseCopyable` if and only if every field of `S` conforms to `BitwiseCopyable`.
+
+For example, the compiler automatically derives a conformance of
 
 ```
 struct Coordinate {
@@ -115,18 +174,32 @@ struct Coordinate {
 }
 ```
 
-conforms because both of its fields, `x` and `y` both conform (`Int` is `BitwiseCopyable`).  The same is true for an enum like `(x: Int, y: Int)`.
+to `BitwiseCopyable` because:
 
-Similarly, an enum's conformance is automatically derived if all of its associated values conform.  For example, the enum
+- `Coordinate` is not exported (it's internal)
+- `x` is `BitwiseCopyable` (`Int` conforms to `BitwiseCopyable`, see [Adding `BitwiseCopyable` to existing standard library types](#extending-existing-stdlib-types))
+- `y` is `BitwiseCopyable` (`Int` conforms)
+
+#### Enum conformance
+
+Similarly, given an unexported enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` conforms to `BitwiseCopyable`.
+
+For example, the compiler automatically derives a conformance of 
 
 ```
-enum Change {
-  case initial(Coordinate)
-  case update(Vector)
+private enum PositionUpdate {
+  case begin(Coordinate)
+  case move(x_change: Int, y_change: Int)
+  case end
 }
 ```
 
-because `Coordinate` and `Vector` both conform to `BitwiseCopyable`.
+to `BitwiseCopyable` because
+- `PositionUpdate` is not exported (it's private)
+- `Coordinate` is `BitwiseCopyable`
+- `Vector` is `BitwiseCopyable`
+
+Note that the `end` case has no associated value which would have to conform.  This does not obstruct automatic conformance.
 
 The same applies for generic types.  Conformance of this struct
 
@@ -193,8 +266,8 @@ Take for example a type that keeps an internal pointer into itself using one of 
 ```swift
 struct FlattenedTree {
   var data: Buffer<UInt8>
-  var childrenStart: UnsafeRawPointer<UInt8>
-  var metadataStart: UnsafeRawPointer<UInt8>
+  var childrenStart: UnsafeRawPointer
+  var metadataStart: UnsafeRawPointer
 
   func copy() { /* ... */ }
 }
@@ -205,35 +278,45 @@ Copying the buffer correctly requires not only making a copy of these pointers, 
 The author of `FlattenedTree` knows this, so a conformance to `BitwiseCopyable` was not written on this type.
 But if automatic derivation were permitted for this type, users of the type may accidentially mis-use the type.
 
-## Conforming to `BitwiseCopyable`
-
-The reference types, like `class` and `actor`, may be represented as automatically managed pointers, so they cannot conform to `BitwiseCopyable`. This extends to `weak` and `unowned` storage containing such a reference type, as they still require bookkeeping during a copy. Only `unowned(unsafe)` is truly free of any safety and thus bookkeeping, but will not be considered as `BitwiseCopyable` during automatic derivation.
-
-Function types are also reference types and thus they are not generally `BitwiseCopyable`. There are only two exception: `@convention(c)` and `@convention(thin)` function types in Swift are `BitwiseCopyable` because there is no reference counted capture context associated with such functions.
-
-### The primitive types
+## Builtin module changes<a name="builtin-module-changes"/>
 
 <!-- Based on KnownStdlibTypes.def -->
 
 The following built-in types and kinds of values in Swift are considered to be 
 primitive, thus they implicitly satisfy `BitwiseCopyable`:
 
+The tuple type conforms to `BitwiseCopyable` conditionally.  It conforms if all of its elements conform.
 
+## Standard library changes<a name="standard-library-changes"/>
 
-### Adding `BitwiseCopyable` to existing standard library types
+### Existing standard library protocols<a name="extending-existing-stdlib-protocols"/>
 
-The following protocol types in the standard library will gain the `BitwiseCopyable` 
-constraint:
+The following protocols in the standard library will gain the `BitwiseCopyable` constraint:
 
 - `FixedWidthInteger`
 - `_Pointer`
 - `SIMDStorage`, `SIMDScalar`, `SIMD`
 
-The following value types in the standard library will gain the `BitwiseCopyable` 
-constraint:
+### Existing standard library types<a name="extending-existing-stdlib-types"/>
 
+The following types in the standard library will gain the `BitwiseCopyable` constraint:
 
-
+- `Bool`
+- The fixed-precision integer types:
+  - `Int8`, `Int16`, `Int32`, `Int64`, `Int`
+  - `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt`
+- The fixed-precision floating-point types: 
+  - `Float`, `Double`, `Float80`
+- the family of `SIMDx<Scalar>` types
+- `StaticString`
+- The family of unmanaged pointer types:
+  - `OpaquePointer`
+  - `UnsafeRawPointer`, `UnsafeMutableRawPointer`
+  - `UnsafePointer`, `UnsafeMutablePointer`, `AutoreleasingUnsafeMutablePointer`
+  - `UnsafeBufferPointer`, `UnsafeMutableBufferPointer`
+  - `UnsafeRawBufferPointer`, `UnsafeMutableRawBufferPointer`
+  - `Unmanaged<T>`
+  - `Optional<T>` when `T` is `BitwiseCopyable`
 
 ## Effect on ABI stability
 
