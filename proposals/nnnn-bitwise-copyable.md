@@ -86,11 +86,11 @@ func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>,
 ## Detailed design
 
 A type may conform to `BitwiseCopyable` whenever it is merely an aggregation of values which are themselves `BitwiseCopyable`.
-When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregation.
+When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregation (see [Explicit conformance to `BitwiseCopyable`]()()).
 If it is not, diagnostics are emitted.
-Much of the time, the compiler will automatically generate these conformances for such aggregations (see [Automatic derivation of `BitwiseCopyable`](#automatic-derivation)).
+Much of the time, the compiler will automatically generate these conformances for such aggregations (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
 
-## Explicit conformance of `BitwiseCopyable`
+## Explicit conformance of `BitwiseCopyable`<a name="explicit-conformance"/>
 
 When a nominal type is declared to conform to `BitwiseCopyable`, the compiler will check that the type is in fact "bitwise copyable".
 
@@ -352,9 +352,6 @@ Herein lies some modifications or additions left out of this proposal.
 ### Require direct conformance to `BitwiseCopyable`
 
 One solution to the Source Compatability problem described earlier is to disallow retroactive conformances to `BitwiseCopyable` for types defined in a different module, even if they are non-resilient.
-
-In addition, various levels of relaxed checking for retroactive conformances, like an `@unchecked BitwiseCopyable`, might be worth considering to allow clients to adopt the protocol when they are reasonably sure it is correct.
-
 
 ## Acknowledgments
 This proposal has benefitted from discussions with John McCall, Joe Groff, Andrew Trick, Michael Gottesman, and Guillaume Lessard.
