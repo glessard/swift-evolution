@@ -155,7 +155,6 @@ The automatic derivation to `BitwiseCopyable` is mostly analogous to the automat
 Aggregates (structs and enums) that are local to a module enjoy automatic deriviation if all of their components (fields and associated values, respectively) conform.  
 The same applies to `@frozen` types exported from a module.  
 Finally, conformance is not derived automatically on a conditional basis.
-The only exception is for fields whose conformance is `@unchecked`.
 
 ### Unexported aggregates
 
@@ -257,26 +256,6 @@ public struct Coordinate2 {
 ```
 
 In this case, conformance will once again be automatically derived because both fields are `BitwiseCopyable`.
-
-The only exception is that types with an explicitly `@unchecked` conformance to `BitwiseCopyable` are not considered to be `BitwiseCopyable` during derivation.
-The family of Unsafe types in the Swift standard library have an `@unchecked BitwiseCopyable` conformance.
-Excluding such types during automatic derivation helps ensure that using unsafe constructs remains explicitly opt-in rather than implicit.
-Take for example a type that keeps an internal pointer into itself using one of the Unsafe types:
-
-```swift
-struct FlattenedTree {
-  var data: Buffer<UInt8>
-  var childrenStart: UnsafeRawPointer
-  var metadataStart: UnsafeRawPointer
-
-  func copy() { /* ... */ }
-}
-```
-
-It would be incorrect to make a bit-for-bit copy of `FlattenedTree` because `childrenStart` is actually an absolute pointer into buffer stored in the same struct.  
-Copying the buffer correctly requires not only making a copy of these pointers, but re-calculating their addresses based on where the copy resides in memory.
-The author of `FlattenedTree` knows this, so a conformance to `BitwiseCopyable` was not written on this type.
-But if automatic derivation were permitted for this type, users of the type may accidentially mis-use the type.
 
 ## Builtin module changes<a name="builtin-module-changes"/>
 
