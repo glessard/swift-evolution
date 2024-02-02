@@ -5,10 +5,6 @@
 * Review Manager: TBD
 * Implementation: On `main` gated behind `-enable-experimental-feature BitwiseCopyable`
 
-- if <T: BitwiseCopyable> { pointerToT.loadUnaligned(...) }
-- Andy wants BWC available in the public interfaces of APIs. Look for isPOD tests. 
-
-
 <!-- *During the review process, add the following fields as needed:*
 
 * Implementation: [apple/swift#NNNNN](https://github.com/apple/swift/pull/NNNNN) or [apple/swift-evolution-staging#NNNNN](https://github.com/apple/swift-evolution-staging/pull/NNNNN)
@@ -57,18 +53,19 @@ Ordinary type constraints, like a protocol, describe capabilities in the form of
 The ability to copy a value of some type bit-for-bit is a fact about a conforming type's memory layout.
 A type's layout, however, may change as a library evolves.
 
-Thus, `BitwiseCopyable` is proposed as a new marker protocol.  
-The compiler will automatically derive conformance to the protocol in many cases.
-And even when conformance of a type to the protocol is declared manually, the compiler will check that its fields are all bitwise copyable.
+To model this capability, `BitwiseCopyable` is proposed as a new marker protocol.  
+When a type is declared to conform to the protocol, the compiler will check that it is in fact bitwise copyable.
+Additionally, the compiler will automatically derive conformance to the protocol in many cases.
 
-A nominal type conforms to the protocol `BitwiseCopyable` if it is an non-resilient, escapable, copyable struct or enum all of whose stored properties or associated values satisfy conform to `BitwiseCopyable`.
+A nominal type may conform to the protocol `BitwiseCopyable` if it is an escapable, copyable struct or enum all of whose stored properties or associated values satisfy conform to `BitwiseCopyable`.
 
 Many types in the standard library will gain a conformance to the protocol.  
 The list of standard library types that will be `BitwiseCopyable` includes
 - numeric types such as the integer types, the floating-point types, and the SIMD types.
 - the pointer types
 - optional, conditionally.
-This list is not exhaustive (see Detailed design). Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have conformed to `BitwiseCopyable` will never lose that conformance.
+For an exhaustive list, see [Detailed design](#detailed-design).
+Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have been conformed to `BitwiseCopyable` will never lose that conformance.
 
 Types satisfying `BitwiseCopyable` can safely support bit-for-bit copying:
 
@@ -83,12 +80,12 @@ func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>,
 }
 ```
 
-## Detailed design
+## Detailed design<a name="detailed-design"/>
 
-A type may conform to `BitwiseCopyable` whenever it is merely an aggregation of values which are themselves `BitwiseCopyable`.
-When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregation (see [Explicit conformance to `BitwiseCopyable`]()()).
-If it is not, diagnostics are emitted.
-Much of the time, the compiler will automatically generate these conformances for such aggregations (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
+Primitive types which can be copied bitwise are conformed to `BitwiseCopyable`--see [Builtin module changes](builtin-module-changes).
+A type may conform to `BitwiseCopyable` whenever it is merely an aggregate (enum or struct) of values which are themselves `BitwiseCopyable`.
+When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregate (see [Explicit conformance to `BitwiseCopyable`](explicit-conformance)).
+Much of the time, the compiler will automatically generate these conformances for such aggregates (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
 
 ## Explicit conformance of `BitwiseCopyable`<a name="explicit-conformance"/>
 
