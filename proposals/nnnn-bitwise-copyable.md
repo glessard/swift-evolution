@@ -15,13 +15,32 @@
 
 ## Introduction
 
-All values of generic type in Swift today support basic capabilities of being copied, moved, and destroyed. A generic value is associated with routines and additional checking when performing such operations to abstract over the underlying concrete type.
-These routines are needed in-part because references can appear anywhere within the underlying concrete value and those references require extra bookkeeping during a copy or destroy.
-But when working with a value of concrete type, Swift can take advantage of knowledge that a value does not contain references, skipping the extra work and performing a simple bit-for-bit copy ("memcpy") or a no-operation destruction.
+All values of generic type in Swift today support the fundamental value operations of being copied, moved, and destroyed. 
+To carry out these operations on a value of generic type, functions associated with the value's dynamic type are looked up and invoked.
+For example, there are functions associated with `String` that perform these operations and are invoked when an `String` value is passed to a generic function.
+This behavior enables the fundamental Swift feature of unspecialized generic code.
+It is not, however, free of performance cost.
 
-This proposal defines a new marker protocol `BitwiseCopyable` to describe generic values that support these simple operations.
+When a concrete type is copied, moved, or destroyed, such indirection is not used.
+When working directly with a `String`, no such functions are invoked.
+The move operation just copies the bits from the source to the destination.
+The copy, operation, however, is more involved: the reference within the `String` must be retained.
+And the destroy operation requires that the reference be released.
+
+Similarly, if a function is working with a tuple of `Int`s directly, it does not invoke such functions.
+Instead, for copy or move operations, it just copies the value bit-by-bit (performing the equivalent of a call to `memcpy`).
+And the destroy operation does nothing.
+For this reason, `Int` is said to be "bitwise copyable".
+
+This document proposes a new marker protocol `BitwiseCopyable` which such bitwise copyable types may conform.
+When a value of generic type conforms to this protocol, the fundamental value operations will involve looking up and invoking functions associated with the value's dynamic type.
+Instead, the copy and move operations will be performed by direct calls to `memcpy`.
+And the destroy operation will do nothing.
+The only indirection required will be to look up the _size_ of the value.
+
 One of the key use-cases for this constraint is to provide safety and performance for low-level code, such that dealing with foreign-function interfaces and serialization.
-For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`). The term _trivial_ in that proposal corresponds to the `BitwiseCopyable` constraint discussed here.
+For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`). 
+The term _trivial_ in that proposal refers to the same property as bitwise copyable discussed here.
 
 ## Motivation
 
@@ -49,25 +68,17 @@ Use-cases include:
 
 ## Proposed solution
 
-Ordinary type constraints, like a protocol, describe capabilities in the form of required members for a type, such as methods, computed properties, and nested types.
-The ability to copy a value of some type bit-for-bit is a fact about a conforming type's memory layout.
-A type's layout, however, may change as a library evolves.
+Protocols allow code to abstract over types that all provide some capability.
 
-To model this capability, `BitwiseCopyable` is proposed as a new marker protocol.  
-When a type is declared to conform to the protocol, the compiler will check that it is in fact bitwise copyable.
-Additionally, the compiler will automatically derive conformance to the protocol in many cases.
+A typical protocol requires some associated functions and types; a type which conforms to the protocol must provide them.
+When a generic value is constrained to conform to the protocol, it enjoys the use of the capabilities the protocol requires of its conformers.
 
-A nominal type may conform to the protocol `BitwiseCopyable` if it is an escapable, copyable struct or enum all of whose stored properties or associated values satisfy conform to `BitwiseCopyable`.
+The ability for a value to be copied bit-by-bit is a capability that some types provide.
+To provide the ability to abstract over types that provide this capability, `BitwiseCopyable` is proposed as a new standard library protocol.
+When a type conforms to `BitwiseCopyable`, it expresses that it has this capability.
+When a generic value is constrained to the protocol, it enjoys having the fundamental value operations being expressible in terms of `memcpy`.
 
-Many types in the standard library will gain a conformance to the protocol.  
-The list of standard library types that will be `BitwiseCopyable` includes
-- numeric types such as the integer types, the floating-point types, and the SIMD types.
-- the pointer types
-- optional, conditionally.
-For an exhaustive list, see [Detailed design](#detailed-design).
-Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have been conformed to `BitwiseCopyable` will never lose that conformance.
-
-Types satisfying `BitwiseCopyable` can safely support bit-for-bit copying:
+Additionally, such bit-by-bit copying can be safely performed explicitly
 
 ```swift
 func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>, 
@@ -79,6 +90,18 @@ func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>,
   toRaw.copyMemory(from: fromRaw)  // effectively, a memcpy
 }
 ```
+
+When a type is declared to conform to a typical protocol, the compiler checks that it provides the functions and types that the protocol requires.
+Similarly, when a type is declared to conform to `BitwiseCopyable`, the compiler will check that it is in fact bitwise copyable.
+Additionally, the compiler will automatically derive conformance to the protocol in many cases.
+
+Many types in the standard library will gain a conformance to the protocol.  
+The list of standard library types that will be `BitwiseCopyable` includes
+- numeric types such as the integer types, the floating-point types, and the SIMD types.
+- pointer types
+- optional, conditionally.
+For an exhaustive list, see [Detailed design](#detailed-design).
+Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have been declared to conform to `BitwiseCopyable` will never lose that conformance.
 
 ## Detailed design<a name="detailed-design"/>
 
