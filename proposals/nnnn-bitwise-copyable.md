@@ -15,7 +15,7 @@
 
 ## Introduction
 
-All values of generic type in Swift today support the fundamental value operations of being copied, moved, and destroyed. 
+All values of generic type in Swift today support the fundamental value operations of copy, move, and destroy. 
 To carry out these operations on a value of generic type, functions associated with the value's dynamic type are looked up and invoked.
 For example, there are functions associated with `String` that perform these operations and are invoked when an `String` value is passed to a generic function.
 This behavior enables the fundamental Swift feature of unspecialized generic code.
