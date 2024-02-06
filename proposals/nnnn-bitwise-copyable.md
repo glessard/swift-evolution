@@ -68,8 +68,10 @@ Use-cases include:
 
 ## Proposed solution
 
-Protocols allow code to abstract over types that all provide some capability.
+To allow types to advertise their bitwise copyability a new protocol `BitwiseCopyable` is proposed.
 
+Why a protocol?
+Protocols allow code to abstract over types that all provide some capability.
 A typical protocol requires some associated functions and types; a type which conforms to the protocol must provide them.
 When a generic value is constrained to conform to the protocol, it enjoys the use of the capabilities the protocol requires of its conformers.
 
@@ -78,13 +80,14 @@ To provide the ability to abstract over types that provide this capability, `Bit
 When a type conforms to `BitwiseCopyable`, it expresses that it has this capability.
 When a generic value is constrained to the protocol, it enjoys having the fundamental value operations being expressible in terms of `memcpy`.
 
-Additionally, such bit-by-bit copying can be safely performed explicitly
+Beyond the fundamental value operations, the protocol enables the standard library to provide safe functions for working with instances of conforming types as raw bytes.
+For example:
 
 ```swift
 func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>, 
                                   to: UnsafeMutableBufferPointer<T>) {
   guard from.count <= to.count else { fatalError("destination too small") }
-  // We know it is safe to quickly memcpy this data as raw bytes!
+  // We know it is safe to quickly memcpy these values as raw bytes!
   let fromRaw = UnsafeRawBufferPointer(from)
   let toRaw = UnsafeMutableRawBufferPointer(to)
   toRaw.copyMemory(from: fromRaw)  // effectively, a memcpy
@@ -92,7 +95,7 @@ func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>,
 ```
 
 When a type is declared to conform to a typical protocol, the compiler checks that it provides the functions and types that the protocol requires.
-Similarly, when a type is declared to conform to `BitwiseCopyable`, the compiler will check that it is in fact bitwise copyable.
+Similarly, when a type is declared to conform to `BitwiseCopyable`, the compiler will check that its instances can in fact be copied bit-by-bit.
 Additionally, the compiler will automatically derive conformance to the protocol in many cases.
 
 Many types in the standard library will gain a conformance to the protocol.  
@@ -105,27 +108,27 @@ Future versions of Swift may conform additional existing types to `BitwiseCopyab
 
 ## Detailed design<a name="detailed-design"/>
 
-Primitive types which can be copied bitwise are conformed to `BitwiseCopyable`--see [Builtin module changes](builtin-module-changes).
-A type may conform to `BitwiseCopyable` whenever it is merely an aggregate (enum or struct) of values which are themselves `BitwiseCopyable`.
-When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregate (see [Explicit conformance to `BitwiseCopyable`](explicit-conformance)).
-Much of the time, the compiler will automatically generate these conformances for such aggregates (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
+Primitive types which can be copied bitwise are conformed to `BitwiseCopyable`([Builtin module changes](#builtin-module-changes)).
+A type may conform to `BitwiseCopyable` whenever it is merely an aggregate (enum or struct) of values which can themselves be copied in this way ([Values copyable bitwise](#bitwise-copyable-values)).
+When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregate (see [Explicit conformance to `BitwiseCopyable`](#explicit-conformance)).
+Much of the time, the compiler will automatically generate conformances for such aggregates (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
+In this way, a hierarchy of types conforming to `BitwiseCopyable` is built up, starting from the simplest types and building outwards.
 
 ## Explicit conformance of `BitwiseCopyable`<a name="explicit-conformance"/>
 
-When a nominal type is declared to conform to `BitwiseCopyable`, the compiler will check that the type is in fact "bitwise copyable".
+When a nominal type is declared to conform to `BitwiseCopyable`, the compiler will check that instances of the type can in fact be copied bitwise.
 
-Any type that involves reference counting is not "bitwise copyable".
-All reference types are reference counted.
+Any type that involves reference counting is not bitwise copyable.
+And all reference types are reference counted.
 So nominal reference types--classes and actors--cannot be conformed.
 
-That leaves only structs and enums, both of which can conform to `BitwiseCopyable`--so long as the types they aggregate together are themselves bitwise copyable.
-By definition, all types that conform to `BitwiseCopyable` are bitwise copyable.
-So types all of whose fields are of types which conform to `BitwiseCopyable` can themselves be conformed to the protocol.
+That leaves only structs and enums.  
+These both can conform to `BitwiseCopyable`--so long as the values they aggregate together are themselves bitwise copyable.
 
-And numerous standard library types (see [Existing standard library types](extending-existing-stdlib-types)) conform to the protocol.
+And many standard library types (see [Existing standard library types](extending-existing-stdlib-types)) are bitwise copyable.
 One such conforming type from the standard library is `Int`.
 
-Which means that the struct
+So the struct
 
 ```
 public struct Point : BitwiseCopyable {
@@ -136,7 +139,8 @@ public struct Point : BitwiseCopyable {
 
 can be conformed to `BitwiseCopyable`.
 Why?
-Because both of its fields `x` and `y` are of type `Int` which conforms to `BitwiseCopyable` and which consequently are bitwise copyable.
+Because both of its fields `x` and `y` are of type `Int` whose values can be copied bit-by-bit. 
+The compiler knows this because `Int` conforms to `BitwiseCopyable` (see [Values copyable bitwise](#bitwise-copyable-values)).
 
 Similarly, the enum
 
@@ -150,12 +154,22 @@ case two(Int, Int)
 
 can be conformed to `BitwiseCopyable`.
 The enum has two associated values: `Int` and `(Int, Int)`.
-As discussed, the former conforms to `BitwiseCopyable`.  
+The former conforms to `BitwiseCopyable`.  
 The latter does too because it's a tuple both of whose elements conform (see [Builtin module changes](builtin-module-changes)).
 
-An aggregate which contains any sort of managed reference to a reference type cannot conform to `BitwiseCopyable`.
+### Values copyable bitwise<a name="bitwise-copyable-values"/>
+
+As described above, a struct or enum may conform to `BitwiseCopyable` when each value it aggregates is copyable bitwise.
+When is that?
+
+By definition, given a type that conforms to `BitwiseCopyable`, values of that type must be copyable bitwise.
+This covers almost all cases.
+
+There is one additional case: values which are decorated `unowned(unsafe)`.
+Any sort of _managed_ reference to a reference type is a value that _cannot_ be copyable bitwise.
 That includes strong, `weak`, and `unowned` references.
 It does _not_ include `unowned(unsafe)` references however.
+
 As a result, an aggregate which contains such a field can still conform:
 
 ```
@@ -164,25 +178,22 @@ public struct UnsafeWrapper : BitwiseCopyable {
 }
 ```
 
-Function types are also reference types and thus they are not generally `BitwiseCopyable`. There are two exceptions: `@convention(c)` and `@convention(thin)` function types in Swift are `BitwiseCopyable` because there is no reference counted capture context associated with such functions.
-
-Classes 
+This conformance is legal because copying an `unowned(unsafe)` reference only involves copying its bits;
+no reference counting occurs as part of the copy.
 
 ## Automatic derivation of `BitwiseCopyable`<a name="automatic-derivation"/>
 
 In many cases, the compiler will automatically derive a type's conformance to `BitwiseCopyable`.  
-The automatic derivation to `BitwiseCopyable` is mostly analogous to the automatic derivation to `Sendable`.
-Aggregates (structs and enums) that are local to a module enjoy automatic deriviation if all of their components (fields and associated values, respectively) conform.  
-The same applies to `@frozen` types exported from a module.  
-Finally, conformance is not derived automatically on a conditional basis.
+This is done by attempting to conform unconditionally each non-resilient type defined in the module.
+If the check determines that a type is bitwise copyable, it will gain a conformance to `BitwiseCopyable`.
 
-### Unexported aggregates
+### Non-resilient aggregates
 
-The fundamental automatic derivation behavior--to which there are a few exceptions--is the behavior for aggregates which aren't exported from a module, described below.
+The fundamental automatic derivation behavior--to which there are a few exceptions--is the behavior for non-resilient aggregates described below.
 
 #### Struct conformance
 
-Given an unexported struct `S`, the compiler will automatically derive a conformance of `S` to `BitwiseCopyable` if and only if every field of `S` conforms to `BitwiseCopyable`.
+Given an non-resilient struct `S`, the compiler will automatically derive a conformance of `S` to `BitwiseCopyable` if and only if every field is bitwise copyable.
 
 For example, the compiler automatically derives a conformance of
 
@@ -201,7 +212,7 @@ to `BitwiseCopyable` because:
 
 #### Enum conformance
 
-Similarly, given an unexported enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` conforms to `BitwiseCopyable`.
+Similarly, given an non-resilient enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` conforms to `BitwiseCopyable`.
 
 For example, the compiler automatically derives a conformance of 
 
@@ -285,6 +296,9 @@ The following built-in types and kinds of values in Swift are considered to be
 primitive, thus they implicitly satisfy `BitwiseCopyable`:
 
 The tuple type conforms to `BitwiseCopyable` conditionally.  It conforms if all of its elements conform.
+
+Function types are also reference types and thus they are not generally `BitwiseCopyable`.
+There are two exceptions: `@convention(c)` and `@convention(thin)` function types in Swift are `BitwiseCopyable` because there is no reference counted capture context associated with such functions.
 
 ## Standard library changes<a name="standard-library-changes"/>
 
