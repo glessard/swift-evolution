@@ -53,9 +53,22 @@ Providing a means to work generic values that consist just of bytes _as_ bytes i
 Already, the standard library provides a number of functions of generic values that require those values to be "trivial"[^2].
 And more are proposed for [`StorageView`](nnnn-safe-shared-contiguous-storage.md).
 In particular, it proposes packing instances of such types into contiguous memory without padding for alignment.
-Swift should provide a language-level abstraction to allow types to advertise this capability.
 
 [^2]: For example, many of the improvements for `UnsafeMutablePointer` within [SE-0369](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial" type in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`).
+
+Specifically, it proposes the following API:
+
+```
+public func loadUnaligned<T: BitwiseCopyable>(
+  fromByteOffset: Int = 0, as: T.Type
+) -> T
+
+public func loadUnaligned<T: BitwiseCopyable>(
+  from index: Index, as: T.Type
+) -> T
+```
+
+Swift should provide a language-level abstraction to allow types to advertise this capability.
 
 ## Proposed solution
 
