@@ -16,62 +16,63 @@
 ## Introduction
 
 All values of generic type in Swift today support the basic value operations of copy, move, and destroy.
-To perform these operations on a value of generic type, functions associated with the value's dynamic type are looked up and invoked.
-For example, there are functions associated with `String` that perform these operations and are invoked when an `String` value is passed to a generic function.
-This behavior enables the fundamental Swift feature of unspecialized generic code.
-It is not, however, free of performance cost.
+To perform these operations on a value of generic type, functions ("value witnesses") associated with the value's dynamic type are looked up and invoked.
+For example, there are functions associated with `String` that perform these operations and are invoked when a `String` value is passed to a generic function.
+This approach enables the fundamental Swift feature of unspecialized generic code.
+It is not without downsides, however: these value witnesses (1) involve a runtime cost and (2) traffic in aligned memory.
 
 When a concrete type is copied, moved, or destroyed, such indirection is not used.
-When working directly with a `String`, no such functions are invoked.
-The move operation just copies the bits from the source to the destination.
+When working concretely with a `String`, for example, `String`'s value witnesses are not invoked.
+Instead, the move operation just copies the bits from the source to the destination.
 The copy, operation, however, is more involved: the reference within the `String` must be retained.
 And the destroy operation requires that the reference be released.
 
 Similarly, if a function is working with a tuple of `Int`s directly, it does not invoke such functions.
 Instead, for copy or move operations, it just copies the value bit-by-bit (performing the equivalent of a call to `memcpy`).
 And the destroy operation does nothing.
-For this reason, `Int` is said to be "bitwise copyable".
+For this reason, `Int` is said to be "bitwise copyable"[^1].
 
-This document proposes a new marker protocol `BitwiseCopyable` which such bitwise copyable types may conform.
-When a value of generic type conforms to this protocol, the value operations will involve looking up and invoking functions associated with the value's dynamic type.
-Instead, the copy and move operations will be performed by direct calls to `memcpy`.
-And the destroy operation will do nothing.
-The only indirection required will be to look up the _size_ of the value.
+[^1]: The term _trivial_ in [SE-0370](0370-pointer-family-initialization-improvements.md) refers to the same property as bitwise copyable discussed here.
 
-One of the key use-cases for this constraint is to provide safety and performance for low-level code, such that dealing with foreign-function interfaces and serialization.
-For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`).
-The term _trivial_ in that proposal refers to the same property as bitwise copyable discussed here.
+This document proposes a new marker protocol `BitwiseCopyable` to which such bitwise copyable types may conform.
+When a value of generic type is constrained to this protocol, the basic value operations of move, copy, and destroy on that value will _not_ be performed via the type's value witnesses.
+Instead, the copy and move operations will be performed by direct calls to `memcpy`, and the destroy operation will do nothing.
+The only indirection required will be to look up the size of the value.
+
+For conforming types, this approach addresses both of the downsides mentioned above.
+The replacement of indirect calls to value witnesses that vary by type to direct calls to `memcpy` decreases the runtime cost.
+Furthermore, that replacement obviates the limitation that memory passed to these value witnesses be aligned.
+That allows for conforming types to be packed into buffers without padding for alignment.
 
 ## Motivation
 
-TODO
+Support for unspecialized generic code is a fundamental feature of Swift.
+And providing safety and performance for low-level code is a key goal for Swift.
+Providing a means to work generic values that consist just of bytes _as_ bytes is a step towards that goal which extends that fundamental feature.
+
+Already, the standard library provides a number of functions of generic values that require those values to be "trivial"[^2].
+And more are proposed for [`StorageView`](nnnn-safe-shared-contiguous-storage.md).
+In particular, it proposes packing instances of such types into contiguous memory without padding for alignment.
+Swift should provide a language-level abstraction to allow types to advertise this capability.
+
+[^2]: For example, many of the improvements for `UnsafeMutablePointer` within [SE-0369](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial" type in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`).
 
 ## Proposed solution
 
 To allow types to advertise their bitwise copyability, a new protocol `BitwiseCopyable` is proposed.
 
 Why a protocol?
-Protocols allow code to abstract over types that all provide some capability.
-A typical protocol requires some associated functions and types; a type which conforms to the protocol must defin them.
-When a generic value is constrained to conform to the protocol, it enjoys the use of the capabilities the protocol requires of its conformers.
+Protocols allow generic code to abstract over types that all provide some capability.
+A typical protocol requires some associated functions and types.
+When a generic value is constrained to the protocol, it enjoys the use of the capabilities the protocol requires of its conformers.
+In order for a type to conform to the protocol, it must implement implement and specify the required functions and types.
+The compiler checks that the type does in fact do so.
 
-Some types can be copied bit-by-bit.
+Some types can be copied bitwise.
 To abstract over types that provide this capability, `BitwiseCopyable` is proposed as a new standard library protocol.
-When a type conforms to `BitwiseCopyable`, it expresses that it has this capability.
 When a generic value is constrained to the protocol, it enjoys having the value operations being expressible in terms of `memcpy`.
-
-Beyond the value operations, the protocol enables the standard library to provide safe functions for working with instances of conforming types as raw bytes.
-For example:
-
-```swift
-func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>,
-                                  to: UnsafeMutableBufferPointer<T>) {
-  // T is BitwiseCopyable, so it's safe to copy these values as raw bytes!
-  let fromRaw = UnsafeRawBufferPointer(from)
-  let toRaw = UnsafeMutableRawBufferPointer(to)
-  toRaw.copyMemory(from: fromRaw)  // effectively, a memcpy
-}
-```
+When a type conforms to `BitwiseCopyable`, it expresses that it has this capability.
+And the compiler checks that it actually does.
 
 Many types in the standard library will gain a conformance to the protocol.
 The list of standard library types that will be `BitwiseCopyable` includes
@@ -81,20 +82,22 @@ The list of standard library types that will be `BitwiseCopyable` includes
 For an exhaustive list, see [Detailed design](#detailed-design).
 Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have been declared to conform to `BitwiseCopyable` will never lose that conformance.
 
-When a type is declared to conform to a typical protocol, the compiler checks that it provides the functions and types that the protocol requires.
-Similarly, when a type is declared to conform to `BitwiseCopyable`, the compiler will check that its instances can in fact be copied bit-by-bit.
 Additionally, the compiler will automatically derive conformance to the protocol in many cases.
-As a result, many types will begin conforming to `BitwiseCopyable`.
+As a result, many types outside the standard library will begin conforming to `BitwiseCopyable` immediately[^3].
+
+[^3]: As soon as they are built with a compiler in which this feature is enabled.
 
 ## Detailed design<a name="detailed-design"/>
 
-When a generic value is constrained to `BitwiseCopyable`, the value operations for that value will be carried out more efficiently.
+When a generic value is constrained to `BitwiseCopyable`, the value operations for that value will be carried out more efficiently and can copy into and out of unaligned storage.
 A large collection of types conforming to is built up, mostly automatically.
-Because the collection is large, the increased efficiency of the value operations will be widely applicable.
+Because the collection is large, these advantages will be widely realized.
 
 ### Value operations
 
 The effect of constraining a generic value to `BitwiseCopyable` is to change how its value operations are performed.
+
+#### Decreased overhead
 
 Consider the following function involving value operations on a generic value:
 
@@ -103,7 +106,11 @@ func passTwice<T>(_ t: consuming T) {
   take(copy t)
   see(t)
 }
+```
 
+where its callees have the signatures
+
+```
 func take<T>(_ _: consuming T)
 func see<T>(_ _: borrowing T)
 ```
@@ -117,10 +124,10 @@ All told, then, the value operations in this function are described in the follo
 
 ```swift
 func passTwice<T>(_ t: consuming T) {
-  let t2 = #copy_value(t) // value operation
+  let t2 = copy_value(t) // value operation
   take(t2)
   see(t)
-  #destroy_value(t) // value operation
+  destroy_value(t) // value operation
 }
 ```
 
@@ -139,7 +146,7 @@ func passTwice<T>(_ t: consuming T) {
 
   // destroy_value expands to...
   let destroy = T.ValueOperations[DestroyIndex]
-  destroy(t)
+  destroy(&t)
 }
 ```
 
@@ -159,6 +166,80 @@ func passTwice<T : BitwiseCopyable>(_ t: consuming T) {
   // nothing!
 }
 ```
+
+This change decreases runtime overhead and code-size.
+
+#### Unaligned value operations
+
+Consider a different function involving value operations and potentially unaligned memory:
+
+```swift
+func store<T>(_ t: consuming T, toReinitialize pointer: UnsafeRawPointer) {
+  pointer.withMemoryBound(to: T.self) { destination in
+    destination = t
+  }
+}
+```
+
+where `withMemoryBound` is a fictional API with the signature
+
+```swift
+extension UnsafeRawPointer {
+  func withMemoryBound<T>(to type: T.self, (inout T) -> Void)
+}
+```
+
+In the closure passed to `withMemoryBound`, the original value at `destination` has to be destroyed and then the new value has to be stored[^4].
+So the value operations in this function look as follows:
+
+[^4]: In fact, these two operations are folded together into a single value operation in this case, "assign with copy".  This value operation is also implemented with `memcpy` for generic values conforming to `BitwiseCopyable`.  To simplify the example, that detail is omitted.
+
+```swift
+func store<T>(_ t: consuming T, toReinitialize pointer: UnsafeRawPointer) {
+  pointer.withMemoryBound(to: T.self) { destination in
+    destroy_value(destination)
+    destination = copy_value(t)
+  }
+}
+```
+
+When `T` is not constrained to `BitwiseCopyable`, the value operations expand to dynamic function dispatch:
+
+```swift
+func store<T>(_ t: consuming T, toReinitialize pointer: UnsafeRawPointer) {
+  pointer.withMemoryBound(to: T.self) { destination in
+    // destroy_value expands to...
+    let destroy = T.ValueOperations[DestroyIndex]
+    destroy(&destination)
+
+    // copy_value expands to...
+    let size = T.ValueOperations[SizeIndex]
+    let t2 = alloca(size)
+    let t2 = memcpy(&t2, &t, T.ValueOperatations)
+  }
+}
+```
+
+The `destroy` and `init_with_copy` value witness require that their arguments be aligned, however.
+So this function can only be called correctly if `pointer` is aligned!
+
+If `T` _is_ constrained to `BitwiseCopyable`, one value operation disappears and the other expands to a direct call to `memcpy`:
+
+```swift
+func store<T>(_ t: consuming T, toReinitialize pointer: UnsafeRawPointer) {
+  pointer.withMemoryBound(to: T.self) { destination in
+    // destroy_value expands to...
+    // nothing!
+
+    // copy_value expands to...
+    let init_with_copy = T.ValueOperations[InitWithCopyIndex]
+    init_with_copy(&destination, &t)
+  }
+}
+```
+
+Once again, no dynamic dispatch to value witnesses occurs.
+And because `memcpy` has no alignment requirements, calling this function is correct, regardless of whether `pointer` is aligned.
 
 ### Hierarchy of conformers
 
