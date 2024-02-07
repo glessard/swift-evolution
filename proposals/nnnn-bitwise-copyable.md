@@ -248,7 +248,7 @@ A type may conform to `BitwiseCopyable` if it is merely an aggregate (enum or st
 When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregate (see [Explicit conformance to `BitwiseCopyable`](#explicit-conformance)).
 Much of the time, the compiler will automatically generate conformances for such aggregates (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
 
-## Explicit conformance to `BitwiseCopyable`<a name="explicit-conformance"/>
+#### Explicit conformance to `BitwiseCopyable`<a name="explicit-conformance"/>
 
 When a nominal type is declared to conform to `BitwiseCopyable`, the compiler will check that instances of the type can in fact be copied bitwise.
 
@@ -258,7 +258,7 @@ And all reference types are reference counted.
 So nominal reference types--classes and actors--cannot be conformed.
 
 That leaves only structs and enums.
-These both can conform to `BitwiseCopyable`--doing so requires that the values they aggregate together are themselves [copyable bitwise](#bitwise-copyable-values).
+These both can conform to `BitwiseCopyable`--doing so requires that the values they aggregate together are themselves `BitwiseCopyable`.
 
 [Many standard library types](extending-existing-stdlib-types) are `BitwiseCopyable`, including `Int`.
 So the struct
@@ -278,17 +278,17 @@ Similarly, the enum
 
 ```
 public enum Simplex : BitwiseCopyable {
-case zero(Int)
-case one(Int, Int)
+case zero(Point)
+case one(Point, Point)
 }
 ```
 
 can be conformed to `BitwiseCopyable`.
-The enum has two associated values: `Int` and `(Int, Int)`.
-The former conforms to `BitwiseCopyable`.
-The latter does too because it's a tuple both of whose elements conform (see [Builtin module changes](builtin-module-changes)).
+The enum has two associated values: `Point` and `(Point, Point)`.
+The former was conformed to `BitwiseCopyable` above.
+The latter conforms too because it's a tuple both of whose elements conform (see [Builtin module changes](builtin-module-changes)).
 
-### Values copyable bitwise<a name="bitwise-copyable-values"/>
+#### Values copyable bitwise<a name="bitwise-copyable-values"/>
 
 As described above, a struct or enum may conform to `BitwiseCopyable` when each value it aggregates is copyable bitwise.
 When is that?
@@ -312,7 +312,7 @@ public struct UnsafeWrapper : BitwiseCopyable {
 This conformance is legal because copying an `unowned(unsafe)` reference only involves copying its bits;
 no reference counting occurs as part of the copy.
 
-## Automatic derivation of `BitwiseCopyable`<a name="automatic-derivation"/>
+#### Automatic derivation of `BitwiseCopyable`<a name="automatic-derivation"/>
 
 In many cases, the compiler will automatically derive a type's conformance to `BitwiseCopyable`.
 This is done by attempting to conform unconditionally each non-resilient type defined in the module.
@@ -324,7 +324,7 @@ The fundamental automatic derivation behavior--to which there are a few exceptio
 
 #### Struct conformance
 
-Given an non-resilient struct `S`, the compiler will automatically derive a conformance of `S` to `BitwiseCopyable` if and only if every field is bitwise copyable.
+Given an non-resilient struct `S`, the compiler will automatically derive a conformance of `S` to `BitwiseCopyable` if and only if every field is a [value copyable bitwise](#bitwise-copyable-values).
 
 For example, the compiler automatically derives a conformance of
 
@@ -343,7 +343,7 @@ to `BitwiseCopyable` because:
 
 #### Enum conformance
 
-Similarly, given an non-resilient enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` is bitwise copyable.
+Similarly, given a non-resilient enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` is a [value copyable bitwise](#bitwise-copyable-values).
 
 For example, the compiler automatically derives a conformance of
 
@@ -392,11 +392,13 @@ extension Pair2 : BitwiseCopyable where Value : BitwiseCopyable {}
 
 such a conformance must be written manually.  Another proposal could lift that restriction (see [Automatic derivation of conditional conformance](#conditonal-conformance-derivation)).
 
-#### Public derivation
+#### Resilient non-derivation
+
+When a module is built without library evolution, conformances are derived for `public` enums and structs as above.
 
 Another case where conformance is not automatically derived is for resilient types.
-These are public non-`@frozen` types defined in a library built for Library Evolution.
-For example, the following type
+These are public (or `@usableFromInline`) non-`@frozen` types defined in a module built for library evolution.
+For example, the following type defined in such a module
 
 ```
 public struct Coordinate2 {
@@ -414,6 +416,7 @@ extension Coordinate2 : BitwiseCopyable {}
 ```
 
 Declaring that the type conforms is a promise that the type will remain `BitwiseCopyable` regardless of how else the library may evolve.
+This is a promise the compiler must not make on the author's behalf.
 
 Alternatively, if the type will never change, it can be marked `@frozen`
 
@@ -433,6 +436,8 @@ In this case, conformance will once again be automatically derived because both 
 
 The following built-in types and kinds of values in Swift are considered to be
 primitive, thus they implicitly satisfy `BitwiseCopyable`:
+
+TODO: Enumerate the types.
 
 The tuple type conforms to `BitwiseCopyable` conditionally.  It conforms if all of its elements conform.
 
@@ -467,45 +472,18 @@ The following types in the standard library will gain the `BitwiseCopyable` cons
   - `UnsafePointer`, `UnsafeMutablePointer`, `AutoreleasingUnsafeMutablePointer`
   - `UnsafeBufferPointer`, `UnsafeMutableBufferPointer`
   - `UnsafeRawBufferPointer`, `UnsafeMutableRawBufferPointer`
-  - `Unmanaged<T>`
+  - `Unmanaged`
   - `Optional<T>` when `T` is `BitwiseCopyable`
+
+TODO: Finish enumerating the types.
 
 ## Effect on ABI stability
 
-The addition of the `BitwiseCopyable` constraint to a type in a library will not
-cause an ABI break for users.
+The addition of the `BitwiseCopyable` constraint to either a type or a protocol in a library will not cause an ABI break for users.
 
 ## Source compatibility
 
 This addition of a new protocol will not impact existing source code that does not use it.
-
-<!-- There is a wrinkle in the source compatability story for `BitwiseCopyable` types. Protocols in Swift typically do not define _negative_ requirements, i.e., that a kind of member does not exist. The `BitwiseCopyable` protocol, in essence, defines an unbounded number of negative requirements.
-
-A consequence of allowing retroactive conformances to non-resilient types defined in other modules is that a new kind of source compatability issue can appear. Suppose an API vendor conditionally includes a stored property for a type, say, depending on the platform:
-
-```swift
-// vendor's type that varies per-platform:
-@frozen public struct Tree {
-  var left: RawPointer
-  var right: RawPointer
-  var size: UInt
-#if macOS
-  var nodeName: NSString = "?"
-#endif
-}
-```
-
-For clients using this API, `Tree` can now only be made retroactively `BitwiseCopyable` on some platforms:
-
-```swift
-// only when compiling for macOS, this conformance is invalid,
-// because String is not BitwiseCopyable!
-extension Tree: BitwiseCopyable {}
-```
-
-In this case, the conditions for when member is included can be mirrored on the client side with an `#if`-guard around the conformance. But, that's not always possible as the conditions can be arbitrary and unknown to clients. Thus, clients may be lulled into believing that their code is cross-platform, when it silently is not.
-
-The only other protocol in Swift that expresses a negative requirement is `Sendable`, but retroactive conformances to `Sendable` are disallowed; only `@unchecked Sendable` is allowed retroactively. -->
 
 ## Effect on API resilience
 
@@ -515,17 +493,39 @@ As with any protocol, the additional constraint can cause a source break for use
 ## Future Directions
 
 ### Automatic derivation of conditional conformances<a name="conditonal-conformance-derivation"/>
-* Conditional inference
-* MemoryLayout<T>.isBitwiseCopyable
-* BitwiseMovable
 
-## Alternatives considered
+As proposed, only _unconditional_ conformances are derived automatically.
+The same is true of derivation of conformances to `Sendable`.
+As a result, some types which are conditionally bitwise copyable will not gain a conformance unless one is written explicitly.
 
-Herein lies some modifications or additions left out of this proposal.
+Consider a wrapper type
 
-### Require direct conformance to `BitwiseCopyable`
+```
+struct Box<Value> {
+  var first: Value
+}
+```
 
-One solution to the Source Compatability problem described earlier is to disallow retroactive conformances to `BitwiseCopyable` for types defined in a different module, even if they are non-resilient.
+It is copyable bitwise whenever `Value` is `BitwiseCopyable`
+
+As proposed, a conditional conformance can be written manually:
+
+```
+extension Box : BitwiseCopyable where Value : BitwiseCopyable {}
+```
+
+### MemoryLayout<T>.isBitwiseCopyable
+
+In certain circumstances, it would be useful to be able to dynamically determine whether a type conforms to `BitwiseCopyable`.
+In order to allow that, a new field could be added to `MemoryLayout`.
+
+### BitwiseMovable
+
+Another fact about a type's memory layout that could be leveraged to write safe code is whether the type can be _moved_ just by writing copying its bits into a new buffer.
+This would enable having "borrowed properties" which store the bits of a value but don't perform any reference counting.
+
+As it turns out, almost all values in Swift are bitwise movable.
+There is a straightforward path to expand the implementation of BitwiseCopyable to BitwiseMovable when such features are proposed.
 
 ## Acknowledgments
-This proposal has benefitted from discussions with John McCall, Joe Groff, Andrew Trick, Michael Gottesman, and Guillaume Lessard.
+This proposal has benefitted from discussions with John McCall, Joe Groff, Andrew Trick, Michael Gottesman, Guillaume Lessard, and Arnold Schwaigofer.
