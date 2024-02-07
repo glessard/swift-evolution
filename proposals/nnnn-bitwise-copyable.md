@@ -30,11 +30,11 @@ And the destroy operation requires that the reference be released.
 Similarly, if a function is working with a tuple of `Int`s directly, it does not invoke such functions.
 Instead, for copy or move operations, it just copies the value bit-by-bit (performing the equivalent of a call to `memcpy`).
 And the destroy operation does nothing.
-For this reason, `Int` is said to be "bitwise copyable"[^1].
+For this reason, `Int` is said to be trivial[^1].
 
-[^1]: The term _trivial_ in [SE-0370](0370-pointer-family-initialization-improvements.md) refers to the same property as bitwise copyable discussed here.
+[^1]: The term "trivial" as used in in [SE-138](0138-unsaferawbufferpointer.md) and [SE-0370](0370-pointer-family-initialization-improvements.md) refers to the same property of a type's layout.
 
-This document proposes a new marker protocol `BitwiseCopyable` to which such bitwise copyable types may conform.
+This document proposes a new marker protocol `BitwiseCopyable` to which such trivial types may conform.
 When a value of generic type is constrained to this protocol, the basic value operations of move, copy, and destroy on that value will _not_ be performed via the type's value witnesses.
 Instead, the copy and move operations will be performed by direct calls to `memcpy`, and the destroy operation will do nothing.
 The only indirection required will be to look up the size of the value.
@@ -59,7 +59,7 @@ Swift should provide a language-level abstraction to allow types to advertise th
 
 ## Proposed solution
 
-To allow types to advertise their bitwise copyability, a new protocol `BitwiseCopyable` is proposed.
+To allow types to advertise their triviality (or "bitwise copyability"), a new protocol `BitwiseCopyable` is proposed.
 
 Why a protocol?
 Protocols allow generic code to abstract over types that all provide some capability.
@@ -244,7 +244,7 @@ And because `memcpy` has no alignment requirements, calling this function is cor
 ### Hierarchy of conformers
 
 Primitive types which can be copied bitwise are conformed to `BitwiseCopyable`([Builtin module changes](#builtin-module-changes)) within the compiler.
-A type may conform to `BitwiseCopyable` if it is merely an aggregate (enum or struct) of values which can themselves be copied in this way ([Values copyable bitwise](#bitwise-copyable-values)).
+A type may conform to `BitwiseCopyable` if it is merely an aggregate (enum or struct) of suitable trivial values ([Values copyable bitwise](#bitwise-copyable-values)).
 When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregate (see [Explicit conformance to `BitwiseCopyable`](#explicit-conformance)).
 Much of the time, the compiler will automatically generate conformances for such aggregates (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
 
@@ -252,7 +252,7 @@ Much of the time, the compiler will automatically generate conformances for such
 
 When a nominal type is declared to conform to `BitwiseCopyable`, the compiler will check that instances of the type can in fact be copied bitwise.
 
-Any type that involves reference counting is not bitwise copyable: 
+Any type that involves reference counting is not trivial: 
 a copy requires incrementing the reference count; a destroy requires decrementing it.
 And all reference types are reference counted.
 So nominal reference types--classes and actors--cannot be conformed.
@@ -288,43 +288,19 @@ The enum has two associated values: `Point` and `(Point, Point)`.
 The former was conformed to `BitwiseCopyable` above.
 The latter conforms too because it's a tuple both of whose elements conform (see [Builtin module changes](builtin-module-changes)).
 
-#### Values copyable bitwise<a name="bitwise-copyable-values"/>
-
-As described above, a struct or enum may conform to `BitwiseCopyable` when each value it aggregates is copyable bitwise.
-When is that?
-
-By definition, given a type that conforms to `BitwiseCopyable`, values of that type must be copyable bitwise.
-This covers almost all cases.
-
-There is one additional case: values which are decorated `unowned(unsafe)`.
-Any sort of _managed_ reference to a reference type is a value that _cannot_ be copyable bitwise.
-That includes strong, `weak`, and `unowned` references.
-It does _not_ include `unowned(unsafe)` references however.
-
-As a result, an aggregate which contains such a field can still conform:
-
-```
-public struct UnsafeWrapper : BitwiseCopyable {
-  unowned(unsafe) var value: AnyObject
-}
-```
-
-This conformance is legal because copying an `unowned(unsafe)` reference only involves copying its bits;
-no reference counting occurs as part of the copy.
-
 #### Automatic derivation of `BitwiseCopyable`<a name="automatic-derivation"/>
 
 In many cases, the compiler will automatically derive a type's conformance to `BitwiseCopyable`.
 This is done by attempting to conform unconditionally each non-resilient type defined in the module.
-If the check determines that a type is bitwise copyable, it will gain a conformance to `BitwiseCopyable`.
+If the check determines that a type is trivial, it will gain a conformance to `BitwiseCopyable`.
 
-### Non-resilient aggregates
+#### Non-resilient aggregates
 
 The fundamental automatic derivation behavior--to which there are a few exceptions--is the behavior for non-resilient aggregates described below.
 
 #### Struct conformance
 
-Given an non-resilient struct `S`, the compiler will automatically derive a conformance of `S` to `BitwiseCopyable` if and only if every field is a [value copyable bitwise](#bitwise-copyable-values).
+Given an non-resilient struct `S`, the compiler will automatically derive a conformance of `S` to `BitwiseCopyable` if and only if every field is [suitable](#bitwise-copyable-values).
 
 For example, the compiler automatically derives a conformance of
 
@@ -343,7 +319,7 @@ to `BitwiseCopyable` because:
 
 #### Enum conformance
 
-Similarly, given a non-resilient enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` is a [value copyable bitwise](#bitwise-copyable-values).
+Similarly, given a non-resilient enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` is a [suitable](#bitwise-copyable-values).
 
 For example, the compiler automatically derives a conformance of
 
@@ -392,7 +368,7 @@ extension Pair2 : BitwiseCopyable where Value : BitwiseCopyable {}
 
 such a conformance must be written manually.  Another proposal could lift that restriction (see [Automatic derivation of conditional conformance](#conditonal-conformance-derivation)).
 
-#### Resilient non-derivation
+#### Resilient non-derivation<a name="resilient-non-derivation"/>
 
 When a module is built without library evolution, conformances are derived for `public` enums and structs as above.
 
@@ -408,7 +384,7 @@ public struct Coordinate2 {
 ```
 
 would not enjoy automatic derivation, despite the fact that it is copyable bitwise.
-Because as the library evolves, the type may cease to be bitwise copyable, the compiler will not derive a conformance for the type based on its current bitwise copyability.
+Because as the library evolves, the type may cease to be trivial, the compiler will not derive a conformance for the type based on its current triviality.
 Nevertheless, a manual conformance can be added:
 
 ```
@@ -422,13 +398,57 @@ Alternatively, if the type will never change, it can be marked `@frozen`
 
 ```
 @frozen
-public struct Coordinate2 {
+public struct Coordinate3 {
   var x: Int
   var y: Int
 }
 ```
 
 In this case, conformance will once again be automatically derived because both fields are `BitwiseCopyable`.
+
+#### Values aggregable by BitwiseCopyable conformers<a name="bitwise-copyable-values"/>
+
+As described above, a struct or enum may conform to `BitwiseCopyable` when each value it aggregates is a "suitable" trivial value.
+When is a trivial value "suitable"?
+
+There are two cases:
+
+(1) A value of a type which conforms to `BitwiseCopyable`.
+
+This is the vast majority situation.
+In fact, the intuition for the hierarchy of types conforming to `BitwiseCopyable` is that it starts from primitive conformers and builds from there via the operation of aggregation.
+
+(2) A value which is decorated `unowned(unsafe)`.
+
+Any sort of _managed_ reference to a reference type is a value that _cannot_ be copyable bitwise.
+That includes strong, `weak`, and `unowned` references.
+It does _not_ include `unowned(unsafe)` references however.
+
+As a result, an aggregate which contains such a field can still conform:
+
+```
+public struct UnsafeWrapper : BitwiseCopyable {
+  unowned(unsafe) var value: AnyObject
+}
+```
+
+This conformance is legal because copying an `unowned(unsafe)` reference only involves copying its bits;
+no reference counting occurs as part of the copy.
+
+On the other hand, when is a trivial value _not_ "suitable"?
+Whenever the value is trivial but its type doesn't conform to `BitwiseCopyable` (except for case (2) above).
+
+There are two cases worth mentioning:
+
+(1) A value of a generic type which could conditionally conform bound at generic arguments at which it would conform.
+
+For example, given the `Box` type [above](#conditonal-conformance-derivation), a value of type `Box<Int>` is trivial.
+If no conformance of `Box` to `BitwiseCopyable` is written manually, though, because conditional conformances are not derived, `Box` will not conform to `BitwiseCopyable`.
+
+(2) An value of a resilient, currently trivial type.
+
+For example, given the `Coordinate2` type [above](#resilient-non-derivation), a value of type `Coordinate2` used within the module is trivial.
+If no conformance of `Coordinate2` to `BitwiseCopyable` is written manually, because it's resilient, it will not conform to `BitwiseCopyable`.
 
 ## Builtin module changes<a name="builtin-module-changes"/>
 
@@ -496,7 +516,7 @@ As with any protocol, the additional constraint can cause a source break for use
 
 As proposed, only _unconditional_ conformances are derived automatically.
 The same is true of derivation of conformances to `Sendable`.
-As a result, some types which are conditionally bitwise copyable will not gain a conformance unless one is written explicitly.
+As a result, some types which are conditionally trivial will not gain a conformance unless one is written explicitly.
 
 Consider a wrapper type
 
@@ -506,7 +526,7 @@ struct Box<Value> {
 }
 ```
 
-It is copyable bitwise whenever `Value` is `BitwiseCopyable`
+It is trivial whenever `Value` is `BitwiseCopyable`
 
 As proposed, a conditional conformance can be written manually:
 
@@ -527,5 +547,13 @@ This would enable having "borrowed properties" which store the bits of a value b
 As it turns out, almost all values in Swift are bitwise movable.
 There is a straightforward path to expand the implementation of BitwiseCopyable to BitwiseMovable when such features are proposed.
 
+## Alternatives considered
+
+### Trivial
+
+"Trivial" is widely used within the compiler and Swift evolution discussions to refer to the property of bitwise copyability.
+`BitwiseCopyable`, on the other hand, is more self-documenting.
+
 ## Acknowledgments
+
 This proposal has benefitted from discussions with John McCall, Joe Groff, Andrew Trick, Michael Gottesman, Guillaume Lessard, and Arnold Schwaigofer.
