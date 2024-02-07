@@ -78,7 +78,7 @@ Why a protocol?
 Protocols allow generic code to abstract over types that all provide some capability.
 A typical protocol requires some associated functions and types.
 When a generic value is constrained to the protocol, it enjoys the use of the capabilities the protocol requires of its conformers.
-In order for a type to conform to the protocol, it must implement implement and specify the required functions and types.
+In order for a type to conform to the protocol, it must implement and specify the required functions and types.
 The compiler checks that the type does in fact do so.
 
 Some types can be copied bitwise.
