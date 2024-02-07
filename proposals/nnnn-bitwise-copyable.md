@@ -15,8 +15,8 @@
 
 ## Introduction
 
-All values of generic type in Swift today support the fundamental value operations of copy, move, and destroy. 
-To carry out these operations on a value of generic type, functions associated with the value's dynamic type are looked up and invoked.
+All values of generic type in Swift today support the basic value operations of copy, move, and destroy.
+To perform these operations on a value of generic type, functions associated with the value's dynamic type are looked up and invoked.
 For example, there are functions associated with `String` that perform these operations and are invoked when an `String` value is passed to a generic function.
 This behavior enables the fundamental Swift feature of unspecialized generic code.
 It is not, however, free of performance cost.
@@ -33,72 +33,47 @@ And the destroy operation does nothing.
 For this reason, `Int` is said to be "bitwise copyable".
 
 This document proposes a new marker protocol `BitwiseCopyable` which such bitwise copyable types may conform.
-When a value of generic type conforms to this protocol, the fundamental value operations will involve looking up and invoking functions associated with the value's dynamic type.
+When a value of generic type conforms to this protocol, the value operations will involve looking up and invoking functions associated with the value's dynamic type.
 Instead, the copy and move operations will be performed by direct calls to `memcpy`.
 And the destroy operation will do nothing.
 The only indirection required will be to look up the _size_ of the value.
 
 One of the key use-cases for this constraint is to provide safety and performance for low-level code, such that dealing with foreign-function interfaces and serialization.
-For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`). 
+For example, many of the improvements for `UnsafeMutablePointer` within [SE-0370](0370-pointer-family-initialization-improvements.md) rely on there being a notion of a "trivial type" in the language to ensure the `Pointee` is safe to copy bit-for-bit (e.g., `UnsafeMutablePointer.initialize(to:)`).
 The term _trivial_ in that proposal refers to the same property as bitwise copyable discussed here.
 
 ## Motivation
 
-<!-- For example, copying a struct involves copying each stored property. If the concrete type is a class, a copy of the reference to the object is created, which involves reference-count bookkeeping. Thus, if a struct contains a  -->
-
-TODO: Craft a motivating example using SE-370???
-
-TODO: two unsafe buffer pointers copy to and from instead of a loop for each element.
-want to optimize the code doing this stuff with memcpy.
-
-Other motivation: need this for evolution proposal to disallow casts to prevent casts from UnsafePointer to UnsafeRawPointer because the type is nontrivial.
-
-UnsafeRawPointer.storeBytes  ?
-
-Ask Andy and Guilluame
-
-Andy has a WWDC talk about this.
-
-
-<!-- 
-Use-cases include:
-- Working with FFIs.
-- Serialization APIs, such as those writing stuff over the wire? 
--->
+TODO
 
 ## Proposed solution
 
-To allow types to advertise their bitwise copyability a new protocol `BitwiseCopyable` is proposed.
+To allow types to advertise their bitwise copyability, a new protocol `BitwiseCopyable` is proposed.
 
 Why a protocol?
 Protocols allow code to abstract over types that all provide some capability.
-A typical protocol requires some associated functions and types; a type which conforms to the protocol must provide them.
+A typical protocol requires some associated functions and types; a type which conforms to the protocol must defin them.
 When a generic value is constrained to conform to the protocol, it enjoys the use of the capabilities the protocol requires of its conformers.
 
-The ability for a value to be copied bit-by-bit is a capability that some types provide.
-To provide the ability to abstract over types that provide this capability, `BitwiseCopyable` is proposed as a new standard library protocol.
+Some types can be copied bit-by-bit.
+To abstract over types that provide this capability, `BitwiseCopyable` is proposed as a new standard library protocol.
 When a type conforms to `BitwiseCopyable`, it expresses that it has this capability.
-When a generic value is constrained to the protocol, it enjoys having the fundamental value operations being expressible in terms of `memcpy`.
+When a generic value is constrained to the protocol, it enjoys having the value operations being expressible in terms of `memcpy`.
 
-Beyond the fundamental value operations, the protocol enables the standard library to provide safe functions for working with instances of conforming types as raw bytes.
+Beyond the value operations, the protocol enables the standard library to provide safe functions for working with instances of conforming types as raw bytes.
 For example:
 
 ```swift
-func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>, 
+func copyAll<T : BitwiseCopyable>(from: UnsafeBufferPointer<T>,
                                   to: UnsafeMutableBufferPointer<T>) {
-  guard from.count <= to.count else { fatalError("destination too small") }
-  // We know it is safe to quickly memcpy these values as raw bytes!
+  // T is BitwiseCopyable, so it's safe to copy these values as raw bytes!
   let fromRaw = UnsafeRawBufferPointer(from)
   let toRaw = UnsafeMutableRawBufferPointer(to)
   toRaw.copyMemory(from: fromRaw)  // effectively, a memcpy
 }
 ```
 
-When a type is declared to conform to a typical protocol, the compiler checks that it provides the functions and types that the protocol requires.
-Similarly, when a type is declared to conform to `BitwiseCopyable`, the compiler will check that its instances can in fact be copied bit-by-bit.
-Additionally, the compiler will automatically derive conformance to the protocol in many cases.
-
-Many types in the standard library will gain a conformance to the protocol.  
+Many types in the standard library will gain a conformance to the protocol.
 The list of standard library types that will be `BitwiseCopyable` includes
 - numeric types such as the integer types, the floating-point types, and the SIMD types.
 - pointer types
@@ -106,28 +81,105 @@ The list of standard library types that will be `BitwiseCopyable` includes
 For an exhaustive list, see [Detailed design](#detailed-design).
 Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have been declared to conform to `BitwiseCopyable` will never lose that conformance.
 
+When a type is declared to conform to a typical protocol, the compiler checks that it provides the functions and types that the protocol requires.
+Similarly, when a type is declared to conform to `BitwiseCopyable`, the compiler will check that its instances can in fact be copied bit-by-bit.
+Additionally, the compiler will automatically derive conformance to the protocol in many cases.
+As a result, many types will begin conforming to `BitwiseCopyable`.
+
 ## Detailed design<a name="detailed-design"/>
 
-Primitive types which can be copied bitwise are conformed to `BitwiseCopyable`([Builtin module changes](#builtin-module-changes)).
-A type may conform to `BitwiseCopyable` whenever it is merely an aggregate (enum or struct) of values which can themselves be copied in this way ([Values copyable bitwise](#bitwise-copyable-values)).
+When a generic value is constrained to `BitwiseCopyable`, the value operations for that value will be carried out more efficiently.
+A large collection of types conforming to is built up, mostly automatically.
+Because the collection is large, the increased efficiency of the value operations will be widely applicable.
+
+### Value operations
+
+The effect of constraining a generic value to `BitwiseCopyable` is to change how its value operations are performed.
+
+Consider the following function involving value operations on a generic value:
+
+```swift
+func passTwice<T>(_ t: consuming T) {
+  take(copy t)
+  see(t)
+}
+
+func take<T>(_ _: consuming T)
+func see<T>(_ _: borrowing T)
+```
+
+The parameter `t` to the function is `consuming`.
+Among other things, that means it must be consumed within `passTwice`.
+Because there is another use of `t` after its use as a `consuming` argument to `take`, a copy is required.
+Because the last use of `t` is as a `borrowing` argument to `see`, it is implicitly destroyed after that use.
+
+All told, then, the value operations in this function are described in the following pseudocode:
+
+```swift
+func passTwice<T>(_ t: consuming T) {
+  let t2 = #copy_value(t) // value operation
+  take(t2)
+  see(t)
+  #destroy_value(t) // value operation
+}
+```
+
+When `T` is not constrained to `BitwiseCopyable`, the value operations expand to dynamic function dispatch:
+
+```swift
+func passTwice<T>(_ t: consuming T) {
+  // copy_value expands to...
+  let size = T.ValueOperations[SizeIndex]
+  let t2 = alloca(size)
+  let init_with_copy = T.ValueOperations[InitWithCopyIndex]
+  init_with_copy(&t2, &t)
+
+  take(t2)
+  see(t)
+
+  // destroy_value expands to...
+  let destroy = T.ValueOperations[DestroyIndex]
+  destroy(t)
+}
+```
+
+If, however, `T` _is_ constrained to `BitwiseCopyable`, one value operation expands to a direct call to `memcpy` and the other disappears entirely:
+
+```swift
+func passTwice<T : BitwiseCopyable>(_ t: consuming T) {
+  // copy_value expands to...
+  let size = T.ValueOperations[SizeIndex]
+  let t2 = alloca(size)
+  let t2 = memcpy(&t2, &t, T.ValueOperatations)
+
+  take(t2)
+  see(t)
+
+  // destroy_value expands to...
+  // nothing!
+}
+```
+
+### Hierarchy of conformers
+
+Primitive types which can be copied bitwise are conformed to `BitwiseCopyable`([Builtin module changes](#builtin-module-changes)) within the compiler.
+A type may conform to `BitwiseCopyable` if it is merely an aggregate (enum or struct) of values which can themselves be copied in this way ([Values copyable bitwise](#bitwise-copyable-values)).
 When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregate (see [Explicit conformance to `BitwiseCopyable`](#explicit-conformance)).
 Much of the time, the compiler will automatically generate conformances for such aggregates (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
-In this way, a hierarchy of types conforming to `BitwiseCopyable` is built up, starting from the simplest types and building outwards.
 
-## Explicit conformance of `BitwiseCopyable`<a name="explicit-conformance"/>
+## Explicit conformance to `BitwiseCopyable`<a name="explicit-conformance"/>
 
 When a nominal type is declared to conform to `BitwiseCopyable`, the compiler will check that instances of the type can in fact be copied bitwise.
 
-Any type that involves reference counting is not bitwise copyable.
+Any type that involves reference counting is not bitwise copyable: 
+a copy requires incrementing the reference count; a destroy requires decrementing it.
 And all reference types are reference counted.
 So nominal reference types--classes and actors--cannot be conformed.
 
-That leaves only structs and enums.  
-These both can conform to `BitwiseCopyable`--so long as the values they aggregate together are themselves bitwise copyable.
+That leaves only structs and enums.
+These both can conform to `BitwiseCopyable`--doing so requires that the values they aggregate together are themselves [copyable bitwise](#bitwise-copyable-values).
 
-And many standard library types (see [Existing standard library types](extending-existing-stdlib-types)) are bitwise copyable.
-One such conforming type from the standard library is `Int`.
-
+[Many standard library types](extending-existing-stdlib-types) are `BitwiseCopyable`, including `Int`.
 So the struct
 
 ```
@@ -139,22 +191,20 @@ public struct Point : BitwiseCopyable {
 
 can be conformed to `BitwiseCopyable`.
 Why?
-Because both of its fields `x` and `y` are of type `Int` whose values can be copied bit-by-bit. 
-The compiler knows this because `Int` conforms to `BitwiseCopyable` (see [Values copyable bitwise](#bitwise-copyable-values)).
+Because both of its fields `x` and `y` are of type `Int` which conforms to `BitwiseCopyable`.
 
 Similarly, the enum
 
 ```
 public enum Simplex : BitwiseCopyable {
-case zero
-case one(Int)
-case two(Int, Int)
+case zero(Int)
+case one(Int, Int)
 }
 ```
 
 can be conformed to `BitwiseCopyable`.
 The enum has two associated values: `Int` and `(Int, Int)`.
-The former conforms to `BitwiseCopyable`.  
+The former conforms to `BitwiseCopyable`.
 The latter does too because it's a tuple both of whose elements conform (see [Builtin module changes](builtin-module-changes)).
 
 ### Values copyable bitwise<a name="bitwise-copyable-values"/>
@@ -183,7 +233,7 @@ no reference counting occurs as part of the copy.
 
 ## Automatic derivation of `BitwiseCopyable`<a name="automatic-derivation"/>
 
-In many cases, the compiler will automatically derive a type's conformance to `BitwiseCopyable`.  
+In many cases, the compiler will automatically derive a type's conformance to `BitwiseCopyable`.
 This is done by attempting to conform unconditionally each non-resilient type defined in the module.
 If the check determines that a type is bitwise copyable, it will gain a conformance to `BitwiseCopyable`.
 
@@ -206,15 +256,15 @@ struct Coordinate {
 
 to `BitwiseCopyable` because:
 
-- `Coordinate` is not exported (it's internal)
+- `Coordinate` is not resilient (it's internal)
 - `x` is `BitwiseCopyable` (`Int` conforms to `BitwiseCopyable`, see [Adding `BitwiseCopyable` to existing standard library types](#extending-existing-stdlib-types))
 - `y` is `BitwiseCopyable` (`Int` conforms)
 
 #### Enum conformance
 
-Similarly, given an non-resilient enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` conforms to `BitwiseCopyable`.
+Similarly, given an non-resilient enum `E`, the compiler will automatically derive a conformance of `E` to `BitwiseCopyable` if and only if every associated value of `E` is bitwise copyable.
 
-For example, the compiler automatically derives a conformance of 
+For example, the compiler automatically derives a conformance of
 
 ```
 private enum PositionUpdate {
@@ -225,11 +275,13 @@ private enum PositionUpdate {
 ```
 
 to `BitwiseCopyable` because
-- `PositionUpdate` is not exported (it's private)
+- `PositionUpdate` is not resilient (it's private)
 - `Coordinate` is `BitwiseCopyable`
-- `Vector` is `BitwiseCopyable`
+- `(x_change: Int, y_change: Int)` is `BitwiseCopyable`
 
 Note that the `end` case has no associated value which would have to conform.  This does not obstruct automatic conformance.
+
+#### Generic derivation
 
 The same applies for generic types.  Conformance of this struct
 
@@ -257,9 +309,13 @@ The reason is that neither `first` nor `second` conforms to `BitwiseCopyable` si
 extension Pair2 : BitwiseCopyable where Value : BitwiseCopyable {}
 ```
 
-such a conformance must be written manually.  Another proposal could lift that restriction (see Future Directions).
+such a conformance must be written manually.  Another proposal could lift that restriction (see [Automatic derivation of conditional conformance](#conditonal-conformance-derivation)).
 
-Another case where conformance is not automatically derived is for non-`@frozen` public types.  For example, the following type
+#### Public derivation
+
+Another case where conformance is not automatically derived is for resilient types.
+These are public non-`@frozen` types defined in a library built for Library Evolution.
+For example, the following type
 
 ```
 public struct Coordinate2 {
@@ -268,13 +324,15 @@ public struct Coordinate2 {
 }
 ```
 
-would not enjoy automatic derivation, despite the fact that both of its fields are `BitwiseCopyable`.  Because the type may change in the future, adding fields that are not `BitwiseCopyable`, the compiler will not conform the type automatically.  Nevertheless, you can add a conformance manually:
+would not enjoy automatic derivation, despite the fact that it is copyable bitwise.
+Because as the library evolves, the type may cease to be bitwise copyable, the compiler will not derive a conformance for the type based on its current bitwise copyability.
+Nevertheless, a manual conformance can be added:
 
 ```
 extension Coordinate2 : BitwiseCopyable {}
 ```
 
-Declaring that the type conforms is a promise that the type will remain `BitwiseCopyable` regardless of the fields that are added or removed from it.
+Declaring that the type conforms is a promise that the type will remain `BitwiseCopyable` regardless of how else the library may evolve.
 
 Alternatively, if the type will never change, it can be marked `@frozen`
 
@@ -292,7 +350,7 @@ In this case, conformance will once again be automatically derived because both 
 
 <!-- Based on KnownStdlibTypes.def -->
 
-The following built-in types and kinds of values in Swift are considered to be 
+The following built-in types and kinds of values in Swift are considered to be
 primitive, thus they implicitly satisfy `BitwiseCopyable`:
 
 The tuple type conforms to `BitwiseCopyable` conditionally.  It conforms if all of its elements conform.
@@ -318,7 +376,7 @@ The following types in the standard library will gain the `BitwiseCopyable` cons
 - The fixed-precision integer types:
   - `Int8`, `Int16`, `Int32`, `Int64`, `Int`
   - `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt`
-- The fixed-precision floating-point types: 
+- The fixed-precision floating-point types:
   - `Float`, `Double`, `Float80`
 - the family of `SIMDx<Scalar>` types
 - `StaticString`
@@ -338,7 +396,7 @@ cause an ABI break for users.
 
 ## Source compatibility
 
-This addition of a new protocol will not impact existing source code that does not use it. 
+This addition of a new protocol will not impact existing source code that does not use it.
 
 <!-- There is a wrinkle in the source compatability story for `BitwiseCopyable` types. Protocols in Swift typically do not define _negative_ requirements, i.e., that a kind of member does not exist. The `BitwiseCopyable` protocol, in essence, defines an unbounded number of negative requirements.
 
@@ -375,6 +433,7 @@ As with any protocol, the additional constraint can cause a source break for use
 
 ## Future Directions
 
+### Automatic derivation of conditional conformances<a name="conditonal-conformance-derivation"/>
 * Conditional inference
 * MemoryLayout<T>.isBitwiseCopyable
 * BitwiseMovable
