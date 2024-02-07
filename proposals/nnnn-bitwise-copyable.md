@@ -48,7 +48,7 @@ That allows for conforming types to be packed into buffers without padding for a
 
 Support for unspecialized generic code is a fundamental feature of Swift.
 And providing safety and performance for low-level code is a key goal for Swift.
-Providing a means to work generic values that consist just of bytes _as_ bytes is a step towards that goal which extends that fundamental feature.
+Providing a means to work with generic values that consist just of bytes _as_ bytes is a step towards that goal which extends that fundamental feature.
 
 Already, the standard library provides a number of functions of generic values that require those values to be "trivial"[^2].
 And more are proposed for [`StorageView`](nnnn-safe-shared-contiguous-storage.md).
