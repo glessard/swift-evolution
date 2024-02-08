@@ -463,7 +463,7 @@ There are two cases worth mentioning:
 For example, given the `Box` type [above](#conditonal-conformance-derivation), a value of type `Box<Int>` is trivial.
 If no conformance of `Box` to `BitwiseCopyable` is written manually, though, because conditional conformances are not derived, `Box` will not conform to `BitwiseCopyable`.
 
-(2) An value of a resilient, currently trivial type.
+(2) A value of a resilient, currently trivial type.
 
 For example, given the `Coordinate2` type [above](#resilient-non-derivation), a value of type `Coordinate2` used within the module is trivial.
 If no conformance of `Coordinate2` to `BitwiseCopyable` is written manually, because it's resilient, it will not conform to `BitwiseCopyable`.
