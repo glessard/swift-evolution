@@ -276,7 +276,7 @@ And all reference types are reference counted.
 So nominal reference types--classes and actors--cannot be conformed.
 
 That leaves only structs and enums.
-These both can conform to `BitwiseCopyable`--doing so requires that the values they aggregate together are themselves `BitwiseCopyable`.
+These both can conform to `BitwiseCopyable`--doing so requires that the values they aggregate together are [suitably trivial](#bitwise-copyable-values).
 
 [Many standard library types](extending-existing-stdlib-types) are `BitwiseCopyable`, including `Int`.
 So the struct
