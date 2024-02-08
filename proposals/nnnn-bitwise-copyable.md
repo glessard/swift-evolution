@@ -262,7 +262,7 @@ And because `memcpy` has no alignment requirements, calling this function is cor
 ### Hierarchy of conformers
 
 Primitive types which can be copied bitwise are conformed to `BitwiseCopyable`([Builtin module changes](#builtin-module-changes)) within the compiler.
-A type may conform to `BitwiseCopyable` if it is merely an aggregate (enum or struct) of suitable trivial values ([Values copyable bitwise](#bitwise-copyable-values)).
+A type may conform to `BitwiseCopyable` if it is merely an aggregate (enum or struct) of [suitable trivial values](#bitwise-copyable-values).
 When a type is declared to conform to `BitwiseCopyable`, the compiler checks that it is such an aggregate (see [Explicit conformance to `BitwiseCopyable`](#explicit-conformance)).
 Much of the time, the compiler will automatically generate conformances for such aggregates (see [Automatic derivation to `BitwiseCopyable`](#automatic-derivation)).
 
