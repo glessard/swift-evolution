@@ -97,6 +97,7 @@ The list of standard library types that will be `BitwiseCopyable` includes
 - numeric types such as the integer types, the floating-point types, and the SIMD types.
 - pointer types
 - optional, conditionally.
+
 For an exhaustive list, see [Detailed design](#detailed-design).
 Future versions of Swift may conform additional existing types to `BitwiseCopyable`, but types that have been declared to conform to `BitwiseCopyable` will never lose that conformance.
 
