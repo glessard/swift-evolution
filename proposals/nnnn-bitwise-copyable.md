@@ -233,8 +233,7 @@ func store<T>(_ t: consuming T, toReinitialize pointer: UnsafeRawPointer) {
 
     // copy_value expands to...
     let size = T.ValueOperations[SizeIndex]
-    let t2 = alloca(size)
-    let t2 = memcpy(&t2, &t, T.ValueOperatations)
+    memcpy(&destination, &t, size)
   }
 }
 ```
