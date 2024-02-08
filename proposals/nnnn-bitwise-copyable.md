@@ -15,34 +15,12 @@
 
 ## Introduction
 
-All values of generic type in Swift today support the basic value operations of copy, move, and destroy.
-To perform these operations on a value of generic type, functions ("value witnesses") associated with the value's dynamic type are looked up and invoked.
-For example, there are functions associated with `String` that perform these operations and are invoked when a `String` value is passed to a generic function.
-This approach enables the fundamental Swift feature of unspecialized generic code.
-It is not without downsides, however: these value witnesses (1) involve a runtime cost and (2) traffic in aligned memory.
+We propose a new marker protocol `BitwiseCopyable` to identify trivial[^1] types.
+Values of such types can be moved or copied with direct calls to `memcpy` and require no special destroy operation.
+When compiling generic code with such constraints, the compiler can emit these efficient operations directly, only requiring minimal overhead to look up the size of the value at runtime.
+Alternatively, developers can use this constraint to selectively provide high-performance variations of specific operations, such as bulk copying of a container.
 
-When a concrete type is copied, moved, or destroyed, such indirection is not used.
-When working concretely with a `String`, for example, `String`'s value witnesses are not invoked.
-Instead, the move operation just copies the bits from the source to the destination.
-The copy, operation, however, is more involved: the reference within the `String` must be retained.
-And the destroy operation requires that the reference be released.
-
-Similarly, if a function is working with a tuple of `Int`s directly, it does not invoke such functions.
-Instead, for copy or move operations, it just copies the value bit-by-bit (performing the equivalent of a call to `memcpy`).
-And the destroy operation does nothing.
-For this reason, `Int` is said to be trivial[^1].
-
-[^1]: The term "trivial" as used in in [SE-138](0138-unsaferawbufferpointer.md) and [SE-0370](0370-pointer-family-initialization-improvements.md) refers to the same property of a type's layout.
-
-This document proposes a new marker protocol `BitwiseCopyable` to which such trivial types may conform.
-When a value of generic type is constrained to this protocol, the basic value operations of move, copy, and destroy on that value will _not_ be performed via the type's value witnesses.
-Instead, the copy and move operations will be performed by direct calls to `memcpy`, and the destroy operation will do nothing.
-The only indirection required will be to look up the size of the value.
-
-For conforming types, this approach addresses both of the downsides mentioned above.
-The replacement of indirect calls to value witnesses that vary by type to direct calls to `memcpy` decreases the runtime cost.
-Furthermore, that replacement obviates the limitation that memory passed to these value witnesses be aligned.
-That allows for conforming types to be packed into buffers without padding for alignment.
+[^1]: The term "trivial" is used in [SE-138](0138-unsaferawbufferpointer.md) and [SE-0370](0370-pointer-family-initialization-improvements.md) to refer to this property of a type's layout.
 
 ## Motivation
 
