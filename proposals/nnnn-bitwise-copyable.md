@@ -232,8 +232,8 @@ func store<T>(_ t: consuming T, toReinitialize pointer: UnsafeRawPointer) {
     destroy(&destination)
 
     // copy_value expands to...
-    let size = T.ValueOperations[SizeIndex]
-    memcpy(&destination, &t, size)
+    let init_with_copy = T.ValueOperations[InitWithCopyIndex]
+    init_with_copy(&destination, &t)
   }
 }
 ```
@@ -250,8 +250,8 @@ func store<T>(_ t: consuming T, toReinitialize pointer: UnsafeRawPointer) {
     // nothing!
 
     // copy_value expands to...
-    let init_with_copy = T.ValueOperations[InitWithCopyIndex]
-    init_with_copy(&destination, &t)
+    let size = T.ValueOperations[SizeIndex]
+    memcpy(&destination, &t, size)
   }
 }
 ```
