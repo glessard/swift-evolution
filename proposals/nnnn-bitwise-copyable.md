@@ -129,7 +129,7 @@ func passTwice<T>(_ t: consuming T) {
 
 where its callees have the signatures
 
-```
+```swift
 func take<T>(_ _: consuming T)
 func see<T>(_ _: borrowing T)
 ```
