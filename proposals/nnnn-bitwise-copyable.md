@@ -109,7 +109,7 @@ As a result, many types outside the standard library will begin conforming to `B
 ## Detailed design<a name="detailed-design"/>
 
 When a generic value is constrained to `BitwiseCopyable`, the value operations for that value will be carried out more efficiently and can copy into and out of unaligned storage.
-A large collection of types conforming to is built up, mostly automatically.
+A large collection of types conforming to the protocol is built up, mostly automatically.
 Because the collection is large, these advantages will be widely realized.
 
 ### Value operations
