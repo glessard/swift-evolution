@@ -83,6 +83,11 @@ The compiler checks that the type does in fact do so.
 
 Some types can be copied bitwise.
 To abstract over types that provide this capability, `BitwiseCopyable` is proposed as a new standard library protocol.
+
+```swift
+@_marker public protocol BitwiseCopyable {}
+```
+
 When a generic value is constrained to the protocol, it enjoys having the value operations being expressible in terms of `memcpy`.
 When a type conforms to `BitwiseCopyable`, it expresses that it has this capability.
 And the compiler checks that it actually does.
