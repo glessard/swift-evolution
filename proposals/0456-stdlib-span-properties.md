@@ -120,11 +120,6 @@ extension CollectionOfOne {
   var span: Span<Element> { get }
 }
 
-extension SIMD_N_ { // where _N_ ∈ {2, 3, 4 ,8, 16, 32, 64}
-  /// Share this vector's elements as a `Span`
-  var span: Span<Scalar> { get }
-}
-
 extension KeyValuePairs {
   /// Share this `Collection`'s elements as a `Span`
   var span: Span<(Key, Value)> { get }
