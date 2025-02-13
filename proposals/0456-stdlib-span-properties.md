@@ -140,7 +140,7 @@ extension InlineArray where Element: ~Copyable {
 When a `Span`'s element is `BitwiseCopyable`, we allow viewing the underlying memory as raw bytes with `RawSpan`:
 
 ```swift
-extension Span where Element: BitwiseCopyable {
+extension Span where Element: BitwiseCopyable & Sendable {
   /// Share the raw bytes of this `Span`'s elements
   var bytes: RawSpan { get }
 }
