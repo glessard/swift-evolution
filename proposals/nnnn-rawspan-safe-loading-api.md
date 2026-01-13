@@ -33,7 +33,7 @@ By conforming to `FullyInhabited`, a type declares that it has the following cha
 
 The standard library's `FixedWidthInteger` and `BinaryFloatingPoint` types will conform to `FullyInhabited`, as well as `Never`.
 
-An example of a semantic constraint on the values of stored properties would be a type representing polar coordinates. While the properties could be represented as a pair of `Double`, the magnitude cannot be negative. This semantic constraint would disallow such a type from conforming to `FullyInhabited`. A type representing Cartesian coordinates would not have this issue, and could conform to `FullyInhabited`.
+An example of a semantic constraint on the values of stored properties would be `Range<T>`. `Range` imposes the constraint that `lowerBound` must be less than or equal to `upperBound`, disallowing it from conforming to `FullyInhabited`. A type representing Cartesian coordinates would not have this issue, and could conform to `FullyInhabited`, even though it also is composed of a pair of same-type values.
 
 In the initial release of `FullyInhabited`, the compiler will not validate conformances to it. Validation will be implemented in a later version of Swift.
 
@@ -43,7 +43,10 @@ In the initial release of `FullyInhabited`, the compiler will not validate confo
 
 ```swift
 extension RawSpan {
-  func load<T: FullyInhabited>(fromByteOffset: Int = 0, as: T.Type) -> T
+  func load<T: FullyInhabited>(
+    fromByteOffset: Int = 0,
+    as: T.Type = T.self
+  ) -> T
 }
 ```
 
@@ -53,7 +56,7 @@ Additionally, a special version of `load()` will have an additional argument to 
 extension RawSpan {
   func load<T: FullyInhabited & FixedWidthInteger>(
     fromByteOffset: Int = 0,
-    as: T.Type,
+    as: T.Type = T.self,
     _ byteOrder: ByteOrder
   ) -> T
 }
@@ -139,6 +142,10 @@ Question: Would we prefer `ByteOrder` to not be a top-level type?
 extension RawSpan {
   /// Returns a value constructed from the raw memory at the specified offset.
   ///
+  /// The range of bytes required to construct a value of type `T` starting at
+  /// `offset` must be completely within the span.
+  /// `offset` is not required to be aligned for `T`.
+  ///
   /// - Parameters:
   ///   - offset: The offset from the beginning of this span, in bytes.
   ///     `offset` must be nonnegative. The default is zero.
@@ -146,14 +153,14 @@ extension RawSpan {
   /// - Returns: A new value of type `T`, read from `offset`.
   func load<T: FullyInhabited>(
     fromByteOffset offset: Int = 0,
-    as: T.Type
+    as: T.Type = T.self
   ) -> T
 
   /// Returns a value constructed from the raw memory at the specified offset.
   ///
-  /// The range of bytes required to construct an `T` starting at `offset`
-  /// must be completely within the span. `offset` is not required to be aligned
-  /// for `T`.
+  /// The range of bytes required to construct a value of type `T` starting at
+  /// `offset` must be completely within the span.
+  /// `offset` is not required to be aligned for `T`.
   ///
   /// - Parameters:
   ///   - offset: The offset from the beginning of this span, in bytes.
@@ -163,7 +170,7 @@ extension RawSpan {
   /// - Returns: A new value of type `T`, read from `offset`.
   func load<T: FullyInhabited & FixedWidthInteger>(
     fromByteOffset offset: Int = 0,
-    as: T.Type,
+    as: T.Type = T.self,
     _ byteOrder: ByteOrder
   ) -> T
 }
@@ -172,10 +179,10 @@ extension RawSpan {
 
 ```swift
 extension MutableRawSpan {
-  /// Stores a value's bytes into the span's memory at the specified byte offset.
+  /// Stores a value's bytes to the specified offset into the span's memory.
   ///
-  /// The range of bytes required to store an `UInt16` starting at `offset`
-  /// must be completely within the span.
+  /// The range of bytes required to store a value of `T` starting at
+  /// byte offset `offset` must be completely within the span.
   ///
   /// - Parameters:
   ///   - value: The value to store as raw bytes.
@@ -192,6 +199,10 @@ extension MutableRawSpan {
 
   /// Returns a value constructed from the raw memory at the specified offset.
   ///
+  /// The range of bytes required to construct a value of type `T` starting at
+  /// `offset` must be completely within the span.
+  /// `offset` is not required to be aligned for `T`.
+  ///
   /// - Parameters:
   ///   - offset: The offset from the beginning of this span, in bytes.
   ///     `offset` must be nonnegative. The default is zero.
@@ -199,14 +210,14 @@ extension MutableRawSpan {
   /// - Returns: A new value of type `T`, read from `offset`.
   func load<T: FullyInhabited>(
     fromByteOffset offset: Int = 0,
-    as: T.Type
+    as: T.Type = T.self
   ) -> T
 
   /// Returns a value constructed from the raw memory at the specified offset.
   ///
-  /// The range of bytes required to construct an `T` starting at `offset`
-  /// must be completely within the span. `offset` is not required to be aligned
-  /// for `T`.
+  /// The range of bytes required to construct a value of type `T` starting at
+  /// `offset` must be completely within the span.
+  /// `offset` is not required to be aligned for `T`.
   ///
   /// - Parameters:
   ///   - offset: The offset from the beginning of this span, in bytes.
@@ -216,7 +227,7 @@ extension MutableRawSpan {
   /// - Returns: A new value of type `T`, read from `offset`.
   func load<T: FullyInhabited & FixedWidthInteger>(
     fromByteOffset offset: Int = 0,
-    as: T.Type,
+    as: T.Type = T.self,
     _ byteOrder: ByteOrder
   ) -> T
 }
@@ -257,13 +268,13 @@ extension Span {
 
 ##### `FullyInhabited` and conformances in the standard library
 
-A `FullyInhabited` type either has no stored properties, or all its stored properties are vaules of  `FullyInhabited` types. If the type's module is resilient, i.e. compiled with the option `-enable-library-evolution`, then the type must be declared as frozen (`@frozen`). There must be no semantic constraints for any of the conforming type's stored properties.
+A `FullyInhabited` type either has no stored properties, or all its stored properties are values of  `FullyInhabited` types. If the type's module is resilient, i.e. compiled with the option `-enable-library-evolution`, then the type must be declared as frozen (`@frozen`). There must be no semantic constraints for any of the conforming type's stored properties.
 
 ```swift
 protocol FullyInhabited: BitwiseCopyable {}
 ```
 
-Note that `FullyInhabited` does not disallow internal padding bytes. Padding bytes are ignored when determining the value. Types that do not fully use a byte, such as `Bool`, are disallowed. Undefined behaviour can result when an invalid bit pattern is loaded into such values.
+Note that `FullyInhabited` does not disallow internal padding bytes. Padding bytes are ignored when determining the value. Types that do not fully use a byte, such as `Bool`, are disallowed. Undefined behaviour can result when an invalid bit pattern is loaded into such values.
 
 The following conformances will be implemented in the standard library, depending on the platform availability of the base types:
 
@@ -328,7 +339,7 @@ Having a series of concrete functions such as `loadInt32(fromByteOffset:_:)` and
 
 #### Waiting for a compiler-validated `FullyInhabited` layout constraint
 
-The need for the functionality in this proposal is urgent and can be achieved with standard library additions. Validation of the `FullyInhabited` layout constraint will require significant compiler work, and we believe that it is not worth waiting for it.
+The need for the functionality in this proposal is urgent and can be achieved with standard library additions. Validation of the `FullyInhabited` layout constraint will require significant compiler work, and we believe that the API as proposed in this document will provide significant value on its own.
 
 #### Making these additions generic over `FixedWidthInteger & BitwiseCopyable` and `BinaryFloatingPoint & BitwiseCopyable`
 
