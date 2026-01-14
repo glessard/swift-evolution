@@ -23,7 +23,7 @@ In [SE-0447][SE-0447], we introduced `RawSpan` along with some unsafe functions 
 
 ##### `FullyInhabited`
 
-We propose a new layout constraint, `FullyInhabited`, to refine `BitwiseCopyable`. A `FullyInhabited` type has a valid value for every bit pattern that can fit in its representation.
+We propose a new layout constraint, `FullyInhabited`, to refine `BitwiseCopyable`. A `FullyInhabited` type is a safe type with a valid value for every bit pattern that can fit in its representation.
 
 By conforming to `FullyInhabited`, a type declares that it has the following characteristics:
 
@@ -33,7 +33,11 @@ By conforming to `FullyInhabited`, a type declares that it has the following cha
 
 The standard library's `FixedWidthInteger` and `BinaryFloatingPoint` types will conform to `FullyInhabited`, as well as `Never`.
 
-An example of a semantic constraint on the values of stored properties would be `Range<T>`. `Range` imposes the constraint that `lowerBound` must be less than or equal to `upperBound`, disallowing it from conforming to `FullyInhabited`. A type representing Cartesian coordinates would not have this issue, and could conform to `FullyInhabited`, even though it also is composed of a pair of same-type values.
+For example, a type representing two-dimensional Cartesian coordinates, such as `struct Point { var x, y: Int }` could conform to `FullyInhabited`. Its stored properties are `Int`, which is `FullyInhabited`. There are no semantic constraints between the `x` and `y` properties: any combination of `Int` values can represent a valid `Point`.
+
+In contrast, `Range<Int>` could not conform to `FullyInhabited`, even though on the surface it has the same composition as `Point`. There is a semantic constraint between two two stored properties of `Range`: `lowerBound` must be less than or equal to `upperBound`. This makes it unable to conform to `FullyInhabited`.
+
+Other examples of types that cannot conform to `FullyInhabited` are `UnicodeScalar` (some bit patterns are invalid), a hypothetical UTF8-encoded `SmallString` (the sequencing of the constituent bytes matters,) and `UnsafeRawPointer` (it is marked with `@unsafe`.)
 
 In the initial release of `FullyInhabited`, the compiler will not validate conformances to it. Validation will be implemented in a later version of Swift.
 
